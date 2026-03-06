@@ -379,7 +379,6 @@ pub struct AppSettings {
     #[serde(default = "default_typing_tool")]
     pub typing_tool: TypingTool,
     pub external_script_path: Option<String>,
-    #[serde(default)]
     pub long_audio_model: Option<String>,
     #[serde(default = "default_long_audio_threshold_seconds")]
     pub long_audio_threshold_seconds: f32,
@@ -391,6 +390,8 @@ pub struct AppSettings {
     pub post_process_actions: Vec<PostProcessAction>,
     #[serde(default)]
     pub saved_processing_models: Vec<SavedProcessingModel>,
+    #[serde(default)]
+    pub custom_filler_words: Option<Vec<String>>,
 }
 
 fn default_model() -> String {
@@ -808,6 +809,7 @@ pub fn get_default_settings() -> AppSettings {
         gemini_model: default_gemini_model(),
         post_process_actions: Vec::new(),
         saved_processing_models: Vec::new(),
+        custom_filler_words: None,
     }
 }
 
