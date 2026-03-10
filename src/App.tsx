@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
-import { Toaster } from "sonner";
+import { toast, Toaster } from "sonner";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
 import { platform } from "@tauri-apps/plugin-os";
 import { getIdentifier } from "@tauri-apps/api/app";
 import {
@@ -27,7 +28,7 @@ const renderSettingsContent = (section: SidebarSection) => {
 };
 
 function App() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(
     null,
   );
@@ -107,6 +108,16 @@ function App() {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  // Listen for recording errors from the backend and show a toast
+  useEffect(() => {
+    const unlisten = listen<string>("recording-error", (event) => {
+      toast.error(t("errors.recordingFailed", { error: event.payload }));
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [t]);
 
   const checkOnboardingStatus = async () => {
     try {
