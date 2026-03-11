@@ -140,10 +140,27 @@ fn build_apple_intelligence_bridge() {
     .trim()
     .to_string();
 
+    let swiftc_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .expect("Failed to locate swiftc")
+            .stdout,
+    )
+    .expect("swiftc path is not valid UTF-8")
+    .trim()
+    .to_string();
+
     // Check if the SDK supports FoundationModels (required for Apple Intelligence)
     let framework_path =
         Path::new(&sdk_path).join("System/Library/Frameworks/FoundationModels.framework");
-    let has_foundation_models = framework_path.exists();
+    // Also verify the FoundationModelsMacros plugin is available (requires full Xcode, not just CLT)
+    let macro_plugin_path = Path::new(&swiftc_path)
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|root| root.join("lib/swift/host/plugins/libFoundationModelsMacros.dylib"))
+        .unwrap_or_default();
+    let has_foundation_models = framework_path.exists() && macro_plugin_path.exists();
 
     let source_file = if has_foundation_models {
         println!("cargo:warning=Building with Apple Intelligence support.");
@@ -156,17 +173,6 @@ fn build_apple_intelligence_bridge() {
     if !Path::new(source_file).exists() {
         panic!("Source file {} is missing!", source_file);
     }
-
-    let swiftc_path = String::from_utf8(
-        Command::new("xcrun")
-            .args(["--find", "swiftc"])
-            .output()
-            .expect("Failed to locate swiftc")
-            .stdout,
-    )
-    .expect("swiftc path is not valid UTF-8")
-    .trim()
-    .to_string();
 
     let toolchain_swift_lib = Path::new(&swiftc_path)
         .parent()

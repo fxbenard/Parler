@@ -5,6 +5,8 @@ use crate::settings::{get_settings, AutoSubmitKey, ClipboardHandling, PasteMetho
 use enigo::{Direction, Enigo, Key, Keyboard};
 use log::info;
 use std::process::Command;
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -12,8 +14,36 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 #[cfg(target_os = "linux")]
 use crate::utils::{is_kde_wayland, is_wayland};
 
-/// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke, restores clipboard.
-fn paste_via_clipboard(
+/// Time (ms) to wait after sending the paste keystroke before restoring the clipboard.
+/// Electron-based apps (Claude Desktop, VS Code, Slack) process paste asynchronously,
+/// so they need more time than native apps to read clipboard contents.
+const ELECTRON_CLIPBOARD_SETTLE_MS: u64 = 250;
+
+/// Time (ms) to wait after AppleScript paste before restoring the clipboard.
+const APPLESCRIPT_CLIPBOARD_SETTLE_MS: u64 = 300;
+
+/// Release common modifier keys before paste/submit.
+/// This avoids shortcut-modifier bleed-through (e.g. Option still held from Option+Space).
+fn release_modifier_keys(enigo: &mut Enigo) {
+    let _ = enigo.key(Key::Shift, Direction::Release);
+    let _ = enigo.key(Key::Alt, Direction::Release);
+    let _ = enigo.key(Key::Control, Direction::Release);
+    let _ = enigo.key(Key::Meta, Direction::Release);
+}
+
+/// Restore the original clipboard content. Called unconditionally — on both success and error paths.
+fn restore_clipboard(app_handle: &AppHandle, content: &str) {
+    #[cfg(target_os = "linux")]
+    if is_wayland() && is_wl_copy_available() {
+        let _ = write_clipboard_via_wl_copy(content);
+        return;
+    }
+    let _ = app_handle.clipboard().write_text(content);
+}
+
+/// Inner implementation: writes text to clipboard and sends the paste keystroke.
+/// Does NOT restore the clipboard — `paste_via_clipboard` handles that unconditionally.
+fn do_paste_via_clipboard(
     enigo: &mut Enigo,
     text: &str,
     app_handle: &AppHandle,
@@ -21,10 +51,9 @@ fn paste_via_clipboard(
     paste_delay_ms: u64,
 ) -> Result<(), String> {
     let clipboard = app_handle.clipboard();
-    let clipboard_content = clipboard.read_text().unwrap_or_default();
 
-    // Write text to clipboard first
-    // On Wayland, prefer wl-copy for better compatibility (especially with umlauts)
+    // Write text to clipboard first.
+    // On Wayland, prefer wl-copy for better compatibility (especially with umlauts).
     #[cfg(target_os = "linux")]
     let write_result = if is_wayland() && is_wl_copy_available() {
         info!("Using wl-copy for clipboard write on Wayland");
@@ -61,21 +90,28 @@ fn paste_via_clipboard(
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    // Restore original clipboard content
-    // On Wayland, prefer wl-copy for better compatibility
-    #[cfg(target_os = "linux")]
-    if is_wayland() && is_wl_copy_available() {
-        let _ = write_clipboard_via_wl_copy(&clipboard_content);
-    } else {
-        let _ = clipboard.write_text(&clipboard_content);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    let _ = clipboard.write_text(&clipboard_content);
+    // Allow enough time for the target app to process the paste event and read
+    // the clipboard. Electron-based apps (e.g. Claude Desktop, VS Code, Slack)
+    // process paste asynchronously through their event loop.
+    std::thread::sleep(Duration::from_millis(ELECTRON_CLIPBOARD_SETTLE_MS));
 
     Ok(())
+}
+
+/// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke,
+/// then restores the original clipboard content regardless of whether the paste succeeded.
+fn paste_via_clipboard(
+    enigo: &mut Enigo,
+    text: &str,
+    app_handle: &AppHandle,
+    paste_method: &PasteMethod,
+    paste_delay_ms: u64,
+) -> Result<(), String> {
+    let clipboard_content = app_handle.clipboard().read_text().unwrap_or_default();
+    let result = do_paste_via_clipboard(enigo, text, app_handle, paste_method, paste_delay_ms);
+    // Always restore original clipboard content, even if paste failed.
+    restore_clipboard(app_handle, &clipboard_content);
+    result
 }
 
 /// Attempts to send a key combination using Linux-native tools.
@@ -221,63 +257,51 @@ pub fn get_available_typing_tools() -> Vec<String> {
     tools
 }
 
-/// Check if wtype is available (Wayland text input tool)
+/// Check if a CLI tool is available on PATH. Result is cached for the process lifetime
+/// — tool availability is static; re-probing on every paste wastes subprocess spawns.
+#[cfg(target_os = "linux")]
+fn probe_tool(name: &str) -> bool {
+    Command::new("which")
+        .arg(name)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 #[cfg(target_os = "linux")]
 fn is_wtype_available() -> bool {
-    Command::new("which")
-        .arg("wtype")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| probe_tool("wtype"))
 }
 
-/// Check if dotool is available (another Wayland text input tool)
 #[cfg(target_os = "linux")]
 fn is_dotool_available() -> bool {
-    Command::new("which")
-        .arg("dotool")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| probe_tool("dotool"))
 }
 
-/// Check if ydotool is available (uinput-based, works on both Wayland and X11)
 #[cfg(target_os = "linux")]
 fn is_ydotool_available() -> bool {
-    Command::new("which")
-        .arg("ydotool")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| probe_tool("ydotool"))
 }
 
 #[cfg(target_os = "linux")]
 fn is_xdotool_available() -> bool {
-    Command::new("which")
-        .arg("xdotool")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| probe_tool("xdotool"))
 }
 
-/// Check if kwtype is available (KDE Wayland virtual keyboard input tool)
 #[cfg(target_os = "linux")]
 fn is_kwtype_available() -> bool {
-    Command::new("which")
-        .arg("kwtype")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| probe_tool("kwtype"))
 }
 
-/// Check if wl-copy is available (Wayland clipboard tool)
 #[cfg(target_os = "linux")]
 fn is_wl_copy_available() -> bool {
-    Command::new("which")
-        .arg("wl-copy")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| probe_tool("wl-copy"))
 }
 
 /// Type text directly via wtype on Wayland.
@@ -328,8 +352,10 @@ fn type_text_via_dotool(text: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to spawn dotool: {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        // dotool uses "type <text>" command
-        writeln!(stdin, "type {}", text)
+        // dotool's "type" command is line-oriented: \n terminates the command.
+        // \r can also produce unexpected output. Replace both with a space.
+        let safe_text = text.replace(['\n', '\r'], " ");
+        writeln!(stdin, "type {}", safe_text)
             .map_err(|e| format!("Failed to write to dotool stdin: {}", e))?;
     }
 
@@ -427,21 +453,32 @@ fn send_key_combo_via_wtype(paste_method: &PasteMethod) -> Result<(), String> {
 /// Send a key combination (e.g., Ctrl+V) via dotool.
 #[cfg(target_os = "linux")]
 fn send_key_combo_via_dotool(paste_method: &PasteMethod) -> Result<(), String> {
-    let command;
-    match paste_method {
-        PasteMethod::CtrlV => command = "echo key ctrl+v | dotool",
-        PasteMethod::ShiftInsert => command = "echo key shift+insert | dotool",
-        PasteMethod::CtrlShiftV => command = "echo key ctrl+shift+v | dotool",
-        _ => return Err("Unsupported paste method".into()),
-    }
+    use std::io::Write;
     use std::process::Stdio;
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+
+    let key_cmd = match paste_method {
+        PasteMethod::CtrlV => "key ctrl+v",
+        PasteMethod::ShiftInsert => "key shift+insert",
+        PasteMethod::CtrlShiftV => "key ctrl+shift+v",
+        _ => return Err("Unsupported paste method".into()),
+    };
+
+    let mut child = Command::new("dotool")
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("Failed to execute dotool: {}", e))?;
+        .spawn()
+        .map_err(|e| format!("Failed to spawn dotool: {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        writeln!(stdin, "{}", key_cmd)
+            .map_err(|e| format!("Failed to write to dotool stdin: {}", e))?;
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for dotool: {}", e))?;
+
     if !status.success() {
         return Err("dotool failed".into());
     }
@@ -542,25 +579,21 @@ fn paste_direct(
 }
 
 fn send_return_key(enigo: &mut Enigo, key_type: AutoSubmitKey) -> Result<(), String> {
+    info!("Auto-submit using {:?}", key_type);
+
     match key_type {
         AutoSubmitKey::Enter => {
             enigo
-                .key(Key::Return, Direction::Press)
-                .map_err(|e| format!("Failed to press Return key: {}", e))?;
-            enigo
-                .key(Key::Return, Direction::Release)
-                .map_err(|e| format!("Failed to release Return key: {}", e))?;
+                .key(Key::Return, Direction::Click)
+                .map_err(|e| format!("Failed to click Return key: {}", e))?;
         }
         AutoSubmitKey::CtrlEnter => {
             enigo
                 .key(Key::Control, Direction::Press)
                 .map_err(|e| format!("Failed to press Control key: {}", e))?;
             enigo
-                .key(Key::Return, Direction::Press)
-                .map_err(|e| format!("Failed to press Return key: {}", e))?;
-            enigo
-                .key(Key::Return, Direction::Release)
-                .map_err(|e| format!("Failed to release Return key: {}", e))?;
+                .key(Key::Return, Direction::Click)
+                .map_err(|e| format!("Failed to click Return key: {}", e))?;
             enigo
                 .key(Key::Control, Direction::Release)
                 .map_err(|e| format!("Failed to release Control key: {}", e))?;
@@ -570,11 +603,8 @@ fn send_return_key(enigo: &mut Enigo, key_type: AutoSubmitKey) -> Result<(), Str
                 .key(Key::Meta, Direction::Press)
                 .map_err(|e| format!("Failed to press Meta/Cmd key: {}", e))?;
             enigo
-                .key(Key::Return, Direction::Press)
-                .map_err(|e| format!("Failed to press Return key: {}", e))?;
-            enigo
-                .key(Key::Return, Direction::Release)
-                .map_err(|e| format!("Failed to release Return key: {}", e))?;
+                .key(Key::Return, Direction::Click)
+                .map_err(|e| format!("Failed to click Return key: {}", e))?;
             enigo
                 .key(Key::Meta, Direction::Release)
                 .map_err(|e| format!("Failed to release Meta/Cmd key: {}", e))?;
@@ -586,6 +616,90 @@ fn send_return_key(enigo: &mut Enigo, key_type: AutoSubmitKey) -> Result<(), Str
 
 fn should_send_auto_submit(auto_submit: bool, paste_method: PasteMethod) -> bool {
     auto_submit && paste_method != PasteMethod::None
+}
+
+/// Inner implementation of AppleScript paste — writes text to clipboard and fires the keystroke.
+/// Does NOT restore the clipboard — `paste_and_submit_via_applescript` handles that unconditionally.
+#[cfg(target_os = "macos")]
+fn do_paste_via_applescript(
+    text: &str,
+    app_handle: &AppHandle,
+    auto_submit: bool,
+    auto_submit_key: AutoSubmitKey,
+) -> Result<(), String> {
+    // Write transcription to clipboard
+    app_handle
+        .clipboard()
+        .write_text(text)
+        .map_err(|e| format!("Failed to write to clipboard: {}", e))?;
+
+    // Small delay so the pasteboard change propagates
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Build an AppleScript that sends Cmd+V, waits, then optionally presses Return
+    let submit_part = if auto_submit {
+        let key_script = match auto_submit_key {
+            AutoSubmitKey::Enter => {
+                r#"delay 0.15
+                keystroke return"#
+            }
+            AutoSubmitKey::CtrlEnter => {
+                r#"delay 0.15
+                keystroke return using control down"#
+            }
+            AutoSubmitKey::CmdEnter => {
+                r#"delay 0.15
+                keystroke return using command down"#
+            }
+        };
+        key_script.to_string()
+    } else {
+        String::new()
+    };
+
+    let script = format!(
+        r#"tell application "System Events"
+            keystroke "v" using command down
+            {}
+        end tell"#,
+        submit_part
+    );
+
+    info!("Pasting via AppleScript (System Events)");
+
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("Failed to run osascript: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("AppleScript paste failed: {}", stderr));
+    }
+
+    // Wait for the target app to fully consume the clipboard before caller restores it.
+    std::thread::sleep(Duration::from_millis(APPLESCRIPT_CLIPBOARD_SETTLE_MS));
+
+    Ok(())
+}
+
+/// Paste and optionally auto-submit using AppleScript's System Events.
+/// This is significantly more reliable for Electron apps (Claude Desktop,
+/// VS Code, Slack, etc.) because it goes through the macOS accessibility
+/// framework at a higher level than CGEvents / enigo.
+/// Restores original clipboard content regardless of whether the paste succeeded.
+#[cfg(target_os = "macos")]
+fn paste_and_submit_via_applescript(
+    text: &str,
+    app_handle: &AppHandle,
+    auto_submit: bool,
+    auto_submit_key: AutoSubmitKey,
+) -> Result<(), String> {
+    let clipboard_content = app_handle.clipboard().read_text().unwrap_or_default();
+    let result = do_paste_via_applescript(text, app_handle, auto_submit, auto_submit_key);
+    // Always restore original clipboard content, even if the paste failed.
+    restore_clipboard(app_handle, &clipboard_content);
+    result
 }
 
 pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
@@ -605,6 +719,26 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
         paste_method, paste_delay_ms
     );
 
+    // On macOS, use AppleScript for Cmd+V pastes — it is far more reliable
+    // for Electron apps (Claude Desktop, etc.) than CGEvent-based input.
+    #[cfg(target_os = "macos")]
+    if paste_method == PasteMethod::CtrlV {
+        let result = paste_and_submit_via_applescript(
+            &text,
+            &app_handle,
+            settings.auto_submit,
+            settings.auto_submit_key,
+        );
+
+        // After pasting, optionally copy to clipboard based on settings
+        if settings.clipboard_handling == ClipboardHandling::CopyToClipboard {
+            let clipboard = app_handle.clipboard();
+            let _ = clipboard.write_text(&text);
+        }
+
+        return result;
+    }
+
     // Get the managed Enigo instance
     let enigo_state = app_handle
         .try_state::<EnigoState>()
@@ -613,6 +747,9 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
         .0
         .lock()
         .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+
+    // Prevent current shortcut modifiers from affecting paste/submit keystrokes.
+    release_modifier_keys(&mut enigo);
 
     // Perform the paste operation
     match paste_method {
@@ -647,7 +784,10 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     }
 
     if should_send_auto_submit(settings.auto_submit, paste_method) {
-        std::thread::sleep(Duration::from_millis(50));
+        // Wait for the target app to fully process the pasted text before
+        // sending the submit key. Electron-based apps (Claude Desktop, etc.)
+        // need extra time to render the pasted content in their input field.
+        std::thread::sleep(Duration::from_millis(150));
         send_return_key(&mut enigo, settings.auto_submit_key)?;
     }
 
@@ -683,5 +823,25 @@ mod tests {
         assert!(should_send_auto_submit(true, PasteMethod::Direct));
         assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
         assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
+    }
+
+    /// Dotool stdin injection fix: newlines in transcription text must be replaced with spaces
+    /// so they don't create a second command in dotool's line-oriented protocol.
+    #[test]
+    fn dotool_newline_in_text_is_replaced_with_space() {
+        let text = "hello\nworld";
+        let safe_text = text.replace('\n', " ");
+        assert_eq!(safe_text, "hello world");
+        assert!(!safe_text.contains('\n'));
+    }
+
+    #[test]
+    fn dotool_carriage_return_is_also_replaced() {
+        // \r can cause unexpected output in dotool; both \n and \r must be sanitized.
+        let text = "line one\r\nline two\rline three";
+        let safe = text.replace(['\n', '\r'], " ");
+        assert!(!safe.contains('\n'));
+        assert!(!safe.contains('\r'));
+        assert_eq!(safe, "line one  line two line three");
     }
 }
