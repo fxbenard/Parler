@@ -1,6 +1,6 @@
 # Parler
 
-> **This is a personal fork of [cjpais/Handy](https://github.com/cjpais/Handy)** by Melvyn.
+> **This is a personal fork of [Melvynx/Parler](https://github.com/Melvynx/Parler)** (itself a fork of [cjpais/Handy](https://github.com/cjpais/Handy)) by Melvyn, maintained by [fxbenard](https://github.com/fxbenard).
 > It adds custom features on top of the original Handy app while keeping full compatibility with upstream.
 
 ## Custom Additions
@@ -69,7 +69,7 @@ The process is entirely local:
 
 ### Installation
 
-1. Download the latest release from the [releases page](https://github.com/Melvynx/Parler/releases)
+1. Download the latest release from the [releases page](https://github.com/fxbenard/Parler/releases)
 2. Install the application
 3. Launch Parler and grant necessary system permissions (microphone, accessibility)
 4. Configure your preferred keyboard shortcuts in Settings
@@ -135,7 +135,7 @@ handy --start-hidden --no-tray
 
 ## Known Issues & Current Limitations
 
-This project is actively being developed and has some [known issues](https://github.com/Melvynx/Parler/issues). We believe in transparency about the current state:
+This project is actively being developed and has some [known issues](https://github.com/fxbenard/Parler/issues). We believe in transparency about the current state:
 
 ### Major Issues (Help Wanted)
 
