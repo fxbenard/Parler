@@ -194,8 +194,12 @@
             "description": "Le raccourci clavier pour enregistrer et transcrire votre voix."
           },
           "cancel": {
-            "name": "Raccourci d'Annulation",
+            "name": "Raccourci d'annulation",
             "description": "Le raccourci clavier pour annuler l'enregistrement en cours."
+          },
+          "pause": {
+            "name": "Pause / Reprise",
+            "description": "Met en pause ou reprend l'enregistrement en cours."
           },
           "transcribe_with_post_process": {
             "name": "Raccourci de post-traitement",
