@@ -10,6 +10,7 @@
 }
 
 @theme {
+  /* Design tokens */
   --color-text: #0f0f0f;
   --color-background: #fbfbfb;
   --color-background-ui: #4a7fd4;
@@ -39,6 +40,13 @@
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 
+  --scrollbar-thumb: color-mix(in srgb, var(--color-text), transparent 85%);
+  --scrollbar-thumb-hover: color-mix(
+    in srgb,
+    var(--color-text),
+    transparent 70%
+  );
+
   /* Apply colors */
   color: var(--color-text);
   background-color: var(--color-background);
@@ -61,6 +69,30 @@
     --color-logo-primary: #6aa3f7;
     --color-logo-stroke: #b8d4fc;
   }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 20px;
+  border: 3px solid transparent;
+  border-right-width: 4px;
+  border-left-width: 3px;
+  background-clip: content-box;
+  min-height: 32px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 @layer utilities {
