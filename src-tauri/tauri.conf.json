@@ -71,7 +71,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDAxMTU5QTE3NEVDQzZBMUUKUldRZWFzeE9GNW9WQWZXYTQyT0hTcTFsR0YrQVpDOExxdytnNVNBcnN1SEhhSUIwcUxLNEFobWMK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRERDlEODhBRjE5NTQyQUQKUldTdFFwWHhpdGpaVFN4YS9pZXVHTnZIWDA5cWVYT2pKYjc0dEdYYlhjblNqVzRER3c3WHk1cWcK",
       "endpoints": [
         "https://github.com/fxbenard/Parler/releases/latest/download/latest.json"
       ]
