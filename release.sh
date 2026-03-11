@@ -24,16 +24,17 @@ esac
 NEW="$MAJOR.$MINOR.$PATCH"
 echo "🚀 Release: $CURRENT → $NEW"
 
-# Bumper dans les 3 fichiers
-sed -i '' "s/\"version\": \"$CURRENT\"/\"version\": \"$NEW\"/" src-tauri/tauri.conf.json package.json
-sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEW\"/" src-tauri/Cargo.toml
-
-# Vérifier qu'il n'y a pas de changements non commités (hors version)
-if [[ -n $(git diff --name-only | grep -v "tauri.conf.json\|package.json\|Cargo.toml") ]]; then
+# Vérifier qu'il n'y a pas de changements non commités avant de bumper
+if [[ -n $(git status --porcelain) ]]; then
   echo "⚠️  Des changements non commités existent. Commit-les d'abord."
   git status --short
   exit 1
 fi
+
+# Bumper dans les 3 fichiers (un sed par fichier — BSD sed macOS)
+sed -i '' "s/\"version\": \"$CURRENT\"/\"version\": \"$NEW\"/" src-tauri/tauri.conf.json
+sed -i '' "s/\"version\": \"$CURRENT\"/\"version\": \"$NEW\"/" package.json
+sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEW\"/" src-tauri/Cargo.toml
 
 # Commit + tag + push
 git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml
