@@ -445,7 +445,7 @@
       "thresholdLabel": "Seuil de durée (secondes)",
       "thresholdDescription": "Basculer vers ce modèle quand l'enregistrement dépasse cette durée.",
       "disabled": "Désactivé",
-      "seconds": "{{value}}s"
+      "seconds": "{{value}} s"
     },
     "gemini": {
       "title": "API Gemini",
