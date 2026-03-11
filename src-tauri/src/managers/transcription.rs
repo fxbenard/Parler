@@ -505,7 +505,11 @@ impl TranscriptionManager {
                 } else {
                     result
                 };
-                let final_result = filter_transcription_output(&corrected);
+                let final_result = filter_transcription_output(
+                    &corrected,
+                    &settings.app_language,
+                    &settings.custom_filler_words,
+                );
 
                 let et = std::time::Instant::now();
                 info!(

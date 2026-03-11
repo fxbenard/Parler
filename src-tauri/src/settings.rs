@@ -9,6 +9,12 @@ use tauri_plugin_store::StoreExt;
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
 
+pub const PROVIDER_ID_ANTHROPIC: &str = "anthropic";
+pub const PROVIDER_ID_GEMINI: &str = "gemini";
+
+pub const LANG_SIMPLIFIED_CHINESE: &str = "zh-Hans";
+pub const LANG_TRADITIONAL_CHINESE: &str = "zh-Hant";
+
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
