@@ -52,7 +52,7 @@
       "files": {},
       "hardenedRuntime": true,
       "minimumSystemVersion": "10.13",
-      "signingIdentity": "-",
+      "signingIdentity": null,
       "entitlements": "Entitlements.plist"
     },
     "linux": {
