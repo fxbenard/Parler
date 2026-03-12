@@ -8,28 +8,22 @@ const ParlerIcon = ({
   className?: string;
 }) => (
   <svg
-    width={width || 512}
-    height={height || 512}
-    viewBox="0 0 512 512"
+    width={width || 24}
+    height={height || 24}
+    viewBox="0 0 310 270"
     className={className}
     xmlns="http://www.w3.org/2000/svg"
   >
-    <rect
-      x="0"
-      y="0"
-      width="512"
-      height="512"
-      rx="110"
-      ry="110"
-      fill="#3B7DD8"
-    />
     <path
-      d="M120 160 C120 130 145 105 175 105 L337 105 C367 105 392 130 392 160 L392 295 C392 325 367 350 337 350 L200 350 L145 400 L145 350 C130 350 120 340 120 325 Z"
-      fill="white"
+      d="M30 10 C13 10 0 23 0 40 L0 180 C0 197 13 210 30 210 L50 210 L50 260 L110 210 L280 210 C297 210 310 197 310 180 L310 40 C310 23 297 10 280 10 Z"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="8"
+      strokeLinejoin="round"
     />
-    <circle cx="210" cy="228" r="22" fill="#3B7DD8" />
-    <circle cx="270" cy="228" r="22" fill="#3B7DD8" />
-    <circle cx="330" cy="228" r="22" fill="#3B7DD8" />
+    <circle cx="100" cy="115" r="20" fill="white" />
+    <circle cx="155" cy="115" r="20" fill="white" />
+    <circle cx="210" cy="115" r="20" fill="white" />
   </svg>
 );
 
