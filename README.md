@@ -71,9 +71,14 @@ The process is entirely local:
 
 1. Download the latest release from the [releases page](https://github.com/fxbenard/Parler/releases)
 2. Install the application
-3. Launch Parler and grant necessary system permissions (microphone, accessibility)
-4. Configure your preferred keyboard shortcuts in Settings
-5. Start transcribing!
+3. **macOS only:** Since the app is not signed with an Apple Developer certificate, macOS will block it. After installing, run:
+   ```bash
+   xattr -cr /Applications/Parler.app
+   ```
+   This removes the quarantine attribute and allows the app to launch.
+4. Launch Parler and grant necessary system permissions (microphone, accessibility)
+5. Configure your preferred keyboard shortcuts in Settings
+6. Start transcribing!
 
 ### Development Setup
 
