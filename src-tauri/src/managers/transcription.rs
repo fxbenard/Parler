@@ -1,6 +1,8 @@
-use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
+use crate::audio_toolkit::{
+    finalize_transcription, ConversionHint, ConversionLanguage,
+};
 use crate::managers::model::{EngineType, ModelManager};
-use crate::settings::{get_settings, ModelUnloadTimeout};
+use crate::settings::{get_settings, AppSettings, ModelUnloadTimeout};
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
@@ -34,6 +36,25 @@ pub struct ModelStateEvent {
     pub model_id: Option<String>,
     pub model_name: Option<String>,
     pub error: Option<String>,
+}
+
+/// Maps the pinned transcription language to a conversion hint.
+/// Returns `None` for "auto" (caller falls back to on-text detection).
+/// Only French and English are convertible today — everything else skips.
+fn map_selected_language(lang: &str) -> Option<ConversionHint> {
+    match lang {
+        "auto" => None,
+        l if l.starts_with("fr") => Some(ConversionHint::Known(ConversionLanguage::French)),
+        l if l.starts_with("en") => Some(ConversionHint::Known(ConversionLanguage::English)),
+        _ => Some(ConversionHint::Skip),
+    }
+}
+
+/// Conversion hint from explicit settings signals only (no engine knowledge).
+/// Used by Gemini and SenseVoice paths. `translate_to_english` is deliberately
+/// NOT handled here — it only applies to the Whisper path.
+fn conversion_hint_from_settings(settings: &AppSettings) -> ConversionHint {
+    map_selected_language(&settings.selected_language).unwrap_or(ConversionHint::Detect)
 }
 
 enum LoadedEngine {
@@ -496,19 +517,12 @@ impl TranscriptionManager {
                     )
                 })?;
 
-                let corrected = if !settings.custom_words.is_empty() {
-                    apply_custom_words(
-                        &result,
-                        &settings.custom_words,
-                        settings.word_correction_threshold,
-                    )
-                } else {
-                    result
-                };
-                let final_result = filter_transcription_output(
-                    &corrected,
-                    &settings.app_language,
-                    &settings.custom_filler_words,
+                // Full post-processing chain (custom words → fillers → number conversion).
+                // Gemini does not translate, so only the pinned language matters here.
+                let final_result = finalize_transcription(
+                    &result,
+                    &settings,
+                    conversion_hint_from_settings(&settings),
                 );
 
                 let et = std::time::Instant::now();
@@ -521,6 +535,21 @@ impl TranscriptionManager {
                 return Ok(final_result);
             }
         }
+
+        // Conversion hint cascade (explicit signals first, detection as fallback).
+        // Declared before the engine block: set per engine arm inside it, consumed
+        // by the post-processing chain after it.
+        let mut conversion_hint = ConversionHint::Skip;
+        let parakeet_hint = {
+            let model_id = self.current_model_id.lock().unwrap();
+            match model_id.as_deref() {
+                // Parakeet v2 is English-only; v3 auto-detects 25 languages.
+                Some(id) if id.contains("v2") => {
+                    ConversionHint::Known(ConversionLanguage::English)
+                }
+                _ => ConversionHint::Detect,
+            }
+        };
 
         // Perform transcription with the appropriate engine.
         // We use catch_unwind to prevent engine panics from poisoning the mutex,
@@ -547,6 +576,11 @@ impl TranscriptionManager {
                 || -> Result<transcribe_rs::TranscriptionResult> {
                     match &mut engine {
                         LoadedEngine::Whisper(whisper_engine) => {
+                            conversion_hint = if settings.translate_to_english {
+                                ConversionHint::Known(ConversionLanguage::English)
+                            } else {
+                                conversion_hint_from_settings(&settings)
+                            };
                             let whisper_language = if settings.selected_language == "auto" {
                                 None
                             } else {
@@ -571,6 +605,7 @@ impl TranscriptionManager {
                                 .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {}", e))
                         }
                         LoadedEngine::Parakeet(parakeet_engine) => {
+                            conversion_hint = parakeet_hint;
                             let params = ParakeetInferenceParams {
                                 timestamp_granularity: TimestampGranularity::Segment,
                                 ..Default::default()
@@ -581,15 +616,28 @@ impl TranscriptionManager {
                                     anyhow::anyhow!("Parakeet transcription failed: {}", e)
                                 })
                         }
-                        LoadedEngine::Moonshine(moonshine_engine) => moonshine_engine
-                            .transcribe_samples(audio, None)
-                            .map_err(|e| anyhow::anyhow!("Moonshine transcription failed: {}", e)),
-                        LoadedEngine::MoonshineStreaming(streaming_engine) => streaming_engine
-                            .transcribe_samples(audio, None)
-                            .map_err(|e| {
-                                anyhow::anyhow!("Moonshine streaming transcription failed: {}", e)
-                            }),
+                        LoadedEngine::Moonshine(moonshine_engine) => {
+                            // Moonshine is English-only.
+                            conversion_hint = ConversionHint::Known(ConversionLanguage::English);
+                            moonshine_engine
+                                .transcribe_samples(audio, None)
+                                .map_err(|e| anyhow::anyhow!("Moonshine transcription failed: {}", e))
+                        }
+                        LoadedEngine::MoonshineStreaming(streaming_engine) => {
+                            conversion_hint = ConversionHint::Known(ConversionLanguage::English);
+                            streaming_engine
+                                .transcribe_samples(audio, None)
+                                .map_err(|e| {
+                                    anyhow::anyhow!(
+                                        "Moonshine streaming transcription failed: {}",
+                                        e
+                                    )
+                                })
+                        }
                         LoadedEngine::SenseVoice(sense_voice_engine) => {
+                            // zh/ja/ko/yue map to Skip (unsupported), "en" converts,
+                            // "auto" falls back to on-text detection.
+                            conversion_hint = conversion_hint_from_settings(&settings);
                             let language = match settings.selected_language.as_str() {
                                 "zh" | "zh-Hans" | "zh-Hant" => SenseVoiceLanguage::Chinese,
                                 "en" => SenseVoiceLanguage::English,
@@ -664,23 +712,8 @@ impl TranscriptionManager {
             }
         };
 
-        // Apply word correction if custom words are configured
-        let corrected_result = if !settings.custom_words.is_empty() {
-            apply_custom_words(
-                &result.text,
-                &settings.custom_words,
-                settings.word_correction_threshold,
-            )
-        } else {
-            result.text
-        };
-
-        // Filter out filler words and hallucinations
-        let filtered_result = filter_transcription_output(
-            &corrected_result,
-            &settings.app_language,
-            &settings.custom_filler_words,
-        );
+        // Full post-processing chain (custom words → fillers → number conversion)
+        let filtered_result = finalize_transcription(&result.text, &settings, conversion_hint);
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {

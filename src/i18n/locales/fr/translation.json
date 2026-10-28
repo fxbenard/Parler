@@ -335,6 +335,10 @@
         "description": "Traduire automatiquement la parole d'autres langues vers l'anglais pendant la transcription.",
         "descriptionUnsupported": "La traduction n'est pas prise en charge par le modèle {{model}}."
       },
+      "convertNumbers": {
+        "label": "Convertir les nombres en chiffres",
+        "description": "Convertit les nombres dictés en chiffres pendant la transcription (ex. « vingt-trois » → « 23 »). Fonctionne en français et en anglais. Peut faire doublon avec la conversion déjà faite par votre prompt de post-traitement LLM."
+      },
       "modelUnload": {
         "title": "Décharger le modèle",
         "description": "Libérer automatiquement la mémoire GPU/CPU lorsque le modèle n'a pas été utilisé pendant le temps spécifié",

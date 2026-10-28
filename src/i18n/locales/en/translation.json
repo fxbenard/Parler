@@ -341,6 +341,10 @@
         "description": "Automatically translate speech from other languages to English during transcription.",
         "descriptionUnsupported": "Translation is not supported by the {{model}} model."
       },
+      "convertNumbers": {
+        "label": "Convert numbers to digits",
+        "description": "Convert spoken numbers to digits during transcription (e.g., \"twenty-three\" → \"23\"). Works in French and English. May overlap with number formatting in your LLM post-processing prompt."
+      },
       "modelUnload": {
         "title": "Unload Model",
         "description": "Automatically free GPU/CPU memory when the model hasn't been used for the specified time",

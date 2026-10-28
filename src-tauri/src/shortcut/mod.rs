@@ -670,6 +670,25 @@ pub fn change_debug_mode_setting(app: AppHandle, enabled: bool) -> Result<(), St
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_convert_numbers_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.convert_numbers_enabled = enabled;
+    settings::write_settings(&app, settings);
+
+    // Emit event to notify frontend of the change
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({
+            "setting": "convert_numbers_enabled",
+            "value": enabled
+        }),
+    );
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_start_hidden_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.start_hidden = enabled;

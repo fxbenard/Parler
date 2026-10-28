@@ -19,6 +19,7 @@ export { GlobalShortcutInput } from "./GlobalShortcutInput";
 export { HandyKeysShortcutInput } from "./HandyKeysShortcutInput";
 export { ShortcutInput } from "./ShortcutInput";
 export { TranslateToEnglish } from "./TranslateToEnglish";
+export { ConvertNumbers } from "./ConvertNumbers";
 export { CustomWords } from "./CustomWords";
 
 export { AppDataDirectory } from "./AppDataDirectory";

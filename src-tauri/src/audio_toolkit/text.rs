@@ -3,6 +3,134 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use strsim::levenshtein;
 
+use crate::settings::AppSettings;
+
+/// Score threshold for text2num replacement candidates.
+/// 0.0 accepts everything, including French articles ("un café" -> "1 café").
+/// 10.0 keeps real numbers ("vingt-trois") and preserves articles — verified
+/// empirically against text2num 2.8.0. Do not lower without extending the tests.
+pub const NUMBER_CONVERSION_THRESHOLD: f64 = 10.0;
+
+/// Minimum lingua confidence (0.0-1.0) to trust a detection for conversion.
+/// Dictation-length text (5+ words) scores ~0.99 in fr/en; short or mixed
+/// text falls below and is skipped.
+const LINGUA_CONFIDENCE_THRESHOLD: f64 = 0.60;
+
+/// How the conversion language should be resolved for one transcription.
+/// Callers compute this from explicit signals first (pinned language setting,
+/// translate flag, mono-language engine) and only fall back to `Detect`
+/// when the output language is genuinely unknown (whisper-auto, parakeet-v3,
+/// sense-voice-auto, Gemini).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversionHint {
+    /// Language known upfront — no detection needed.
+    Known(ConversionLanguage),
+    /// Language unknown — run lingua detection, skip if unsure.
+    Detect,
+    /// Conversion not applicable (language unsupported by text2num).
+    Skip,
+}
+
+/// Languages supported by the number converter (text2num fr + en).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversionLanguage {
+    French,
+    English,
+}
+
+/// lingua detector restricted to French + English, built once.
+/// A 2-language model is far more accurate than the full-language one for
+/// our use case. `minimum_relative_distance` makes it return `None` instead
+/// of a wild guess when the text is ambiguous.
+static LINGUA_DETECTOR: Lazy<lingua::LanguageDetector> = Lazy::new(|| {
+    lingua::LanguageDetectorBuilder::from_languages(&[
+        lingua::Language::English,
+        lingua::Language::French,
+    ])
+    .with_minimum_relative_distance(0.25)
+    .build()
+});
+
+/// Detects the language of a transcribed text for number conversion.
+/// Returns `None` for ultra-short or ambiguous text (safe: no conversion).
+fn detect_conversion_language(text: &str) -> Option<ConversionLanguage> {
+    if text.split_whitespace().count() < 2 {
+        return None;
+    }
+    let lang = LINGUA_DETECTOR.detect_language_of(text)?;
+    let confidence = LINGUA_DETECTOR.compute_language_confidence(text, lang);
+    if confidence < LINGUA_CONFIDENCE_THRESHOLD {
+        return None;
+    }
+    // if/else instead of match: lingua's Language enum is feature-gated, so with
+    // only en+fr compiled a match would warn about unreachable arms.
+    if lang == lingua::Language::English {
+        Some(ConversionLanguage::English)
+    } else if lang == lingua::Language::French {
+        Some(ConversionLanguage::French)
+    } else {
+        None
+    }
+}
+
+/// Converts spoken numbers to digits ("vingt-trois" -> "23", "twenty-three" -> "23").
+/// Threshold is `NUMBER_CONVERSION_THRESHOLD` — French articles ("un", "une") are
+/// preserved at that level. Returns the input unchanged when conversion is
+/// skipped or the language cannot be determined confidently.
+pub fn convert_numbers(text: &str, hint: ConversionHint) -> String {
+    let lang = match hint {
+        ConversionHint::Skip => return text.to_string(),
+        ConversionHint::Known(lang) => lang,
+        ConversionHint::Detect => match detect_conversion_language(text) {
+            Some(lang) => lang,
+            None => return text.to_string(),
+        },
+    };
+    let t2n_lang = match lang {
+        ConversionLanguage::French => text2num::Language::french(),
+        ConversionLanguage::English => text2num::Language::english(),
+    };
+    let converted = text2num::replace_numbers_in_text(text, &t2n_lang, NUMBER_CONVERSION_THRESHOLD);
+    if converted != text {
+        log::debug!("Number conversion: '{}' -> '{}'", text, converted);
+    }
+    converted
+}
+
+/// Finalizes a raw transcription before it is pasted or post-processed.
+///
+/// Single entry point shared by every transcription path (local engines and
+/// Gemini) so the post-processing chain can never diverge:
+///
+/// ```text
+/// raw text ─▶ apply_custom_words ─▶ filter_transcription_output ─▶ convert_numbers (opt-in)
+/// ```
+///
+/// `hint` carries the conversion-language decision (explicit signals first,
+/// lingua detection only when the language is unknown). Conversion only runs
+/// when `convert_numbers_enabled` is on (default off).
+pub fn finalize_transcription(
+    text: &str,
+    settings: &AppSettings,
+    hint: ConversionHint,
+) -> String {
+    let corrected = if settings.custom_words.is_empty() {
+        text.to_string()
+    } else {
+        apply_custom_words(text, &settings.custom_words, settings.word_correction_threshold)
+    };
+    let filtered = filter_transcription_output(
+        &corrected,
+        &settings.app_language,
+        &settings.custom_filler_words,
+    );
+    if settings.convert_numbers_enabled {
+        convert_numbers(&filtered, hint)
+    } else {
+        filtered
+    }
+}
+
 /// Builds an n-gram string by cleaning and concatenating words
 ///
 /// Strips punctuation from each word, lowercases, and joins without spaces.
@@ -557,5 +685,132 @@ mod tests {
             "got double-counted result: {}",
             result
         );
+    }
+
+    // ── Number conversion (text2num, threshold 10.0) ─────────────────────
+
+    #[test]
+    fn test_convert_numbers_french_basic() {
+        let result = convert_numbers(
+            "rendez-vous le vingt-trois avril",
+            ConversionHint::Known(ConversionLanguage::French),
+        );
+        assert!(result.contains("23"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_convert_numbers_french_preserves_articles() {
+        // The whole point of threshold 10.0: "un"/"une" are articles, not digits.
+        let input = "j'ai un café et une heure";
+        let result = convert_numbers(input, ConversionHint::Known(ConversionLanguage::French));
+        assert_eq!(result, input, "articles must not become digits: {}", result);
+    }
+
+    #[test]
+    fn test_convert_numbers_french_windows_onze() {
+        let result = convert_numbers(
+            "Windows onze est installé",
+            ConversionHint::Known(ConversionLanguage::French),
+        );
+        assert!(result.contains("Windows 11"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_convert_numbers_english() {
+        let result = convert_numbers(
+            "there were twenty-three people",
+            ConversionHint::Known(ConversionLanguage::English),
+        );
+        assert!(result.contains("23"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_convert_numbers_skip_unchanged() {
+        let input = "vingt-trois";
+        assert_eq!(
+            convert_numbers(input, ConversionHint::Skip),
+            input,
+            "Skip hint must leave text unchanged"
+        );
+    }
+
+    #[test]
+    fn test_convert_numbers_already_digits() {
+        let input = "le 23 avril 2026";
+        assert_eq!(
+            convert_numbers(input, ConversionHint::Known(ConversionLanguage::French)),
+            input
+        );
+    }
+
+    #[test]
+    fn test_convert_numbers_empty() {
+        assert_eq!(
+            convert_numbers("", ConversionHint::Known(ConversionLanguage::French)),
+            ""
+        );
+        assert_eq!(convert_numbers("", ConversionHint::Detect), "");
+    }
+
+    #[test]
+    fn test_convert_numbers_detect_french() {
+        let result = convert_numbers(
+            "je suis arrivé à quinze heures trente ce matin",
+            ConversionHint::Detect,
+        );
+        assert!(result.contains("15"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_convert_numbers_detect_english() {
+        let result = convert_numbers(
+            "I will meet you at twenty three o'clock tomorrow morning",
+            ConversionHint::Detect,
+        );
+        assert!(result.contains("23"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_convert_numbers_detect_short_text_skips() {
+        // Ultra-short text: detection must abstain (safe no-op).
+        assert_eq!(convert_numbers("OK", ConversionHint::Detect), "OK");
+    }
+
+    #[test]
+    fn test_finalize_transcription_respects_toggle() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.convert_numbers_enabled = false;
+        let out = finalize_transcription(
+            "rendez-vous le vingt-trois avril",
+            &settings,
+            ConversionHint::Known(ConversionLanguage::French),
+        );
+        assert!(
+            !out.contains("23"),
+            "toggle OFF must not convert, got: {}",
+            out
+        );
+
+        settings.convert_numbers_enabled = true;
+        let out = finalize_transcription(
+            "rendez-vous le vingt-trois avril",
+            &settings,
+            ConversionHint::Known(ConversionLanguage::French),
+        );
+        assert!(out.contains("23"), "toggle ON must convert, got: {}", out);
+    }
+
+    #[test]
+    fn test_finalize_transcription_applies_custom_words_before_numbers() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.convert_numbers_enabled = true;
+        settings.custom_words = vec!["ChargeBee".to_string()];
+        let out = finalize_transcription(
+            "charge b c'est vingt euros",
+            &settings,
+            ConversionHint::Known(ConversionLanguage::French),
+        );
+        assert!(out.contains("ChargeBee"), "custom words lost: {}", out);
+        assert!(out.contains("20"), "numbers not converted: {}", out);
     }
 }
