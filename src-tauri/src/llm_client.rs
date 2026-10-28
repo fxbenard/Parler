@@ -341,7 +341,8 @@ pub async fn fetch_models(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::PROVIDER_ID_OPENAI;
+
+    const PROVIDER_ID_OPENAI: &str = "openai";
 
     fn make_provider(id: &str, base_url: &str) -> PostProcessProvider {
         PostProcessProvider {
@@ -349,7 +350,6 @@ mod tests {
             label: id.to_string(),
             base_url: base_url.to_string(),
             allow_base_url_edit: false,
-            requires_api_key: true,
             models_endpoint: None,
             supports_structured_output: false,
         }
