@@ -499,6 +499,14 @@ impl TranscriptionManager {
             .map(|info| info.name)
     }
 
+    /// Engine type of the currently loaded model, if any.
+    pub fn current_engine_type(&self) -> Option<EngineType> {
+        let model_id = self.get_current_model()?;
+        self.model_manager
+            .get_model_info(&model_id)
+            .map(|info| info.engine_type)
+    }
+
     pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
         // Update last activity timestamp
         self.last_activity.store(

@@ -3,6 +3,7 @@ use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
+use crate::managers::model::EngineType;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
     get_settings, AppSettings, PostProcessAction, APPLE_INTELLIGENCE_PROVIDER_ID,
@@ -505,6 +506,16 @@ async fn maybe_convert_chinese_variant(
     }
 }
 
+/// Engines that transcribe long recordings natively (no Whisper-style window
+/// limits). Swapping them for another model adds a load penalty and changes
+/// punctuation/normalization mid-session for no accuracy gain.
+fn engine_handles_long_audio(engine: EngineType) -> bool {
+    matches!(
+        engine,
+        EngineType::AppleSpeech | EngineType::Parakeet | EngineType::Cohere
+    )
+}
+
 /// Switch to the long-audio model if the recording duration exceeds the configured threshold.
 /// Returns `Some(original_model_id)` if the switch succeeded (caller must restore afterward),
 /// or `None` if no switch was needed or the switch failed.
@@ -517,6 +528,15 @@ fn maybe_switch_model_for_long_audio(
     let duration_seconds = sample_count as f32 / SAMPLE_RATE_HZ;
 
     let long_model_id = settings.long_audio_model.as_ref()?;
+
+    if let Some(engine) = tm.current_engine_type() {
+        if engine_handles_long_audio(engine) {
+            debug!(
+                "Long audio model switch skipped: current engine handles long audio natively"
+            );
+            return None;
+        }
+    }
 
     if duration_seconds <= settings.long_audio_threshold_seconds
         || original_model.as_deref() == Some(long_model_id.as_str())
@@ -922,6 +942,37 @@ impl ShortcutAction for TestAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_long_audio_engines_skip_the_swap() {
+        for engine in [
+            EngineType::AppleSpeech,
+            EngineType::Parakeet,
+            EngineType::Cohere,
+        ] {
+            assert!(
+                engine_handles_long_audio(engine.clone()),
+                "{:?} must skip the long-audio swap",
+                engine
+            );
+        }
+    }
+
+    #[test]
+    fn whisper_family_still_uses_the_long_audio_model() {
+        for engine in [
+            EngineType::Whisper,
+            EngineType::SenseVoice,
+            EngineType::Moonshine,
+            EngineType::MoonshineStreaming,
+        ] {
+            assert!(
+                !engine_handles_long_audio(engine.clone()),
+                "{:?} must keep the long-audio swap",
+                engine
+            );
+        }
+    }
 
     #[test]
     fn new_phraser_bundle_id_recognized() {
