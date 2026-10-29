@@ -55,7 +55,7 @@ hound = "3.5.1"
 base64 = "0.22"
 log = "0.4.25"
 env_filter = "0.1.0"
-tokio = "1.43.0"
+tokio = { version = "1.43.0", features = ["fs", "io-util"] }
 vad-rs = { git = "https://github.com/cjpais/vad-rs", default-features = false }
 enigo = "0.6.1"
 rodio = { git = "https://github.com/cjpais/rodio.git" }
@@ -69,7 +69,7 @@ chrono = "0.4"
 rusqlite = { version = "0.37", features = ["bundled"] }
 tar = "0.4.44"
 flate2 = "1.0"
-transcribe-rs = { version = "0.2.5", features = ["whisper", "parakeet", "moonshine", "sense_voice"] }
+transcribe-rs = { version = "0.3.12", features = ["whisper-cpp", "onnx"] }
 handy-keys = "0.2.1"
 ferrous-opencc = "0.2.3"
 clap = { version = "4", features = ["derive"] }
@@ -101,6 +101,12 @@ windows = { version = "0.61.3", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
+# Metal acceleration for the whisper.cpp backend.
+transcribe-rs = { version = "0.3.12", features = ["whisper-metal"] }
+
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# Vulkan acceleration for the whisper.cpp backend.
+transcribe-rs = { version = "0.3.12", features = ["whisper-vulkan"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }

@@ -25,6 +25,7 @@ pub enum EngineType {
     SenseVoice,
     GeminiApi,
     AppleSpeech,
+    Cohere,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -54,6 +55,31 @@ pub struct DownloadProgress {
     pub downloaded: u64,
     pub total: u64,
     pub percentage: f64,
+}
+
+/// Models hosted on Hugging Face as individual files (no tarball).
+const HF_MODEL_REPOS: &[(&str, &str)] = &[(
+    "cohere-transcribe-int4",
+    "cstr/cohere-transcribe-onnx-int4",
+)];
+
+fn huggingface_repo_for(model_id: &str) -> Option<&'static str> {
+    HF_MODEL_REPOS
+        .iter()
+        .find(|(id, _)| *id == model_id)
+        .map(|(_, repo)| *repo)
+}
+
+/// Files worth downloading from a HF model repo: ONNX graphs, external weight
+/// blobs, tokenizers and configs. README/LICENSE/scripts are skipped.
+fn should_download_hf_file(path: &str) -> bool {
+    if path.starts_with('.') || path.contains('/') {
+        return false;
+    }
+    matches!(
+        Path::new(path).extension().and_then(|e| e.to_str()),
+        Some("onnx" | "data" | "txt" | "json")
+    )
 }
 
 pub struct ModelManager {
@@ -424,6 +450,39 @@ impl ModelManager {
             },
         );
 
+        // Cohere Transcribe: best-in-class multilingual accuracy, downloaded
+        // file-by-file from Hugging Face (no tarball hosting needed).
+        let cohere_languages: Vec<String> = vec![
+            "en", "fr", "de", "it", "es", "pt", "el", "nl", "pl", "zh", "ja", "ko", "vi", "ar",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        available_models.insert(
+            "cohere-transcribe-int4".to_string(),
+            ModelInfo {
+                id: "cohere-transcribe-int4".to_string(),
+                name: "Cohere Transcribe".to_string(),
+                description:
+                    "Top multilingual accuracy (14 languages incl. French). ~2 GB download."
+                        .to_string(),
+                filename: "cohere-transcribe-int4".to_string(),
+                url: None,
+                size_mb: 2000,
+                is_downloaded: false,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: true,
+                engine_type: EngineType::Cohere,
+                accuracy_score: 0.95,
+                speed_score: 0.75,
+                supports_translation: false,
+                is_recommended: false,
+                supported_languages: cohere_languages,
+                is_custom: false,
+            },
+        );
+
         // Apple Speech: fully on-device, uses the system model (no download).
         // Only offered when the OS, SDK and hardware support SpeechAnalyzer.
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -735,6 +794,147 @@ impl ModelManager {
         Ok(())
     }
 
+    /// Downloads every model file from a Hugging Face repo into the model
+    /// directory. Files are written into `<name>.partial/` and the directory is
+    /// renamed on success, so an interrupted download never looks complete.
+    /// Re-running resumes at file granularity.
+    async fn download_huggingface_model(&self, model_id: &str, repo: &str) -> Result<()> {
+        #[derive(Deserialize)]
+        struct HfEntry {
+            path: String,
+            #[serde(default)]
+            size: u64,
+            #[serde(rename = "type", default)]
+            kind: String,
+        }
+
+        let model_info = {
+            let models = self.available_models.lock().unwrap();
+            models.get(model_id).cloned()
+        }
+        .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
+
+        let model_path = self.models_dir.join(&model_info.filename);
+        let partial_dir = self
+            .models_dir
+            .join(format!("{}.partial", &model_info.filename));
+
+        if model_path.exists() {
+            let _ = fs::remove_dir_all(&partial_dir);
+            self.update_download_status()?;
+            return Ok(());
+        }
+
+        {
+            let mut models = self.available_models.lock().unwrap();
+            if let Some(model) = models.get_mut(model_id) {
+                model.is_downloading = true;
+            }
+        }
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.cancel_flags
+            .lock()
+            .unwrap()
+            .insert(model_id.to_string(), cancel_flag.clone());
+
+        let result = async {
+            fs::create_dir_all(&partial_dir)?;
+            let client = reqwest::Client::new();
+            let entries: Vec<HfEntry> = client
+                .get(format!("https://huggingface.co/api/models/{repo}/tree/main"))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+
+            let files: Vec<HfEntry> = entries
+                .into_iter()
+                .filter(|entry| {
+                    entry.kind != "directory" && should_download_hf_file(&entry.path)
+                })
+                .collect();
+            if files.is_empty() {
+                return Err(anyhow::anyhow!("No downloadable files in HF repo {repo}"));
+            }
+
+            let total: u64 = files.iter().map(|file| file.size).sum();
+            let mut done: u64 = 0;
+            let mut last_emit = Instant::now();
+
+            for file in &files {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Err(anyhow::anyhow!("cancelled"));
+                }
+                let dest = partial_dir.join(&file.path);
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                // Resume: a fully-downloaded file of the expected size is kept.
+                if dest.exists() && dest.metadata().map(|m| m.len()).unwrap_or(0) == file.size {
+                    done += file.size;
+                    continue;
+                }
+
+                let url = format!("https://huggingface.co/{repo}/resolve/main/{}", file.path);
+                let mut stream = client
+                    .get(&url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .bytes_stream();
+                let mut out = tokio::fs::File::create(&dest).await?;
+                use tokio::io::AsyncWriteExt;
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk?;
+                    out.write_all(&chunk).await?;
+                    done += chunk.len() as u64;
+                    if last_emit.elapsed() >= Duration::from_millis(100) {
+                        last_emit = Instant::now();
+                        let progress = DownloadProgress {
+                            model_id: model_id.to_string(),
+                            downloaded: done,
+                            total,
+                            percentage: if total > 0 {
+                                (done as f64 / total as f64) * 100.0
+                            } else {
+                                0.0
+                            },
+                        };
+                        let _ = self.app_handle.emit("model-download-progress", &progress);
+                    }
+                }
+                out.flush().await?;
+            }
+
+            Ok(())
+        }
+        .await;
+
+        self.cancel_flags.lock().unwrap().remove(model_id);
+
+        match result {
+            Ok(()) => {
+                fs::rename(&partial_dir, &model_path)?;
+                self.update_download_status()?;
+                let _ = self.app_handle.emit("model-download-complete", model_id);
+                Ok(())
+            }
+            Err(e) => {
+                let mut models = self.available_models.lock().unwrap();
+                if let Some(model) = models.get_mut(model_id) {
+                    model.is_downloading = false;
+                }
+                if e.to_string().contains("cancelled") {
+                    info!("Download cancelled for: {}", model_id);
+                    let _ = self.app_handle.emit("model-download-cancelled", model_id);
+                    return Ok(());
+                }
+                Err(e)
+            }
+        }
+    }
+
     pub async fn download_model(&self, model_id: &str) -> Result<()> {
         let model_info = {
             let models = self.available_models.lock().unwrap();
@@ -746,6 +946,11 @@ impl ModelManager {
 
         if matches!(model_info.engine_type, EngineType::GeminiApi | EngineType::AppleSpeech) {
             return Ok(());
+        }
+
+        // Hugging Face repos are downloaded file-by-file instead of a tarball.
+        if let Some(repo) = huggingface_repo_for(model_id) {
+            return self.download_huggingface_model(model_id, repo).await;
         }
 
         let url = model_info

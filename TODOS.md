@@ -53,15 +53,24 @@ Each item has an explicit reactivation trigger. Do not build speculatively.
 - **Effort:** L human / M CC
 - **Reactivation trigger:** after T1–T5 (text2num + keyring) ship.
 
-## P2 — transcribe-rs 0.2.5 → 0.3.x upgrade (unlocks Canary 1B v2 + Cohere Transcribe)
+## P3 — Canary 1B v2 engine (blocked on packaging)
 
-- **What:** Absorb the 0.3.0 breaking change (`SpeechModel` trait) to unlock Canary + Cohere engines via the existing `onnx` feature (same infra as Parakeet).
-- **Why:** Cohere Transcribe (2B, Apache 2.0, 14 langs incl. FR, claimed 5.42% WER #1 leaderboard, shipped by Superwhisper for local dictation) = best downloadable FR quality. Canary 1B v2 (1B, 25 langs, beats Whisper-large-v3 EN at 10x speed, built-in AST could replace `translate_to_english`) = solid middle ground. One upgrade unlocks both for comparison.
-- **Pros:** No new dependency class; real A/B/C against Parakeet v3; Cohere is prod-proven for dictation.
-- **Cons:** Breaking trait migration across `managers/transcription.rs` + `managers/model.rs`; 2 GB (Cohere) / 1 GB (Canary) int8 downloads; InferenceBench (2026-10) couldn't validate Cohere's 5.42% claim on real audio — test before switching defaults.
-- **Context:** transcribe-rs is cjpais's crate (Handy upstream author) — upgrading keeps Parler close to upstream. Canary AST = candidate to replace the whisper `translate_to_english` path.
-- **Effort:** M human / S-M CC
-- **Reactivation trigger:** after T1–T5 ship; pairs naturally with the Apple SpeechAnalyzer work (engine selector UI touched by both).
+- **What:** Add NVIDIA Canary 1B v2 as an engine (transcribe-rs 0.3 support already present).
+- **Why blocked:** `CanaryModel::load` requires `nemo128.onnx` (FP32 preprocessor), which is absent from every public ONNX export checked (istupakov/canary-1b-v2-onnx, canary-1b-flash-onnx, canary-180m-flash-onnx). Producing it requires exporting the NeMo preprocessor (nemo_toolkit) ourselves.
+- **Pros once unblocked:** 25 languages, beats Whisper-large-v3 on English at 10x speed, built-in AST (`target_language`) could replace the whisper-only `translate_to_english`.
+- **Context:** transcribe-rs 0.3.12 is already wired (`EngineType::Cohere` path is the template). Add `EngineType::Canary` + a model entry with `hf_repo`, mirroring Cohere. Files needed in the model dir: `nemo128.onnx`, `encoder-model.int8.onnx`, `decoder-model.int8.onnx`, `vocab.txt`.
+- **Effort:** M human / S CC (once nemo128.onnx is produced)
+- **Reactivation trigger:** a complete ONNX export with the preprocessor appears, or someone exports nemo128.onnx.
+
+## P3 — ONNX Runtime CoreML acceleration
+
+- **What:** Enable `ort-coreml` (`transcribe-rs` feature) so Parakeet/Cohere/Moonshine/SenseVoice run on the Neural Engine/GPU instead of CPU.
+- **Why:** Cohere int4 on CPU already runs ~8s for a short phrase; CoreML EP could cut that substantially and reduce battery cost.
+- **Pros:** Major speedup on Apple Silicon for all ONNX engines.
+- **Cons:** Build-time risk (ORT binaries with CoreML), possible EP fallbacks/instability; needs A/B testing per engine.
+- **Context:** `transcribe-rs` features `ort-coreml` / `ort-cuda` / `ort-directml` exist. Enable per-target in Cargo.toml.
+- **Effort:** S-M human / S CC
+- **Reactivation trigger:** Cohere (or Parakeet) CPU latency becomes annoying in daily use.
 
 ---
 

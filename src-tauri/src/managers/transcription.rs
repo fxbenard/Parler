@@ -13,22 +13,32 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter};
 use transcribe_rs::{
-    engines::{
+    onnx::{
+        cohere::{CohereModel, CohereParams},
         moonshine::{
-            ModelVariant, MoonshineEngine, MoonshineModelParams, MoonshineStreamingEngine,
-            StreamingModelParams,
+            MoonshineModel, MoonshineParams, MoonshineStreamingParams, MoonshineVariant,
+            StreamingModel,
         },
-        parakeet::{
-            ParakeetEngine, ParakeetInferenceParams, ParakeetModelParams, TimestampGranularity,
-        },
-        sense_voice::{
-            Language as SenseVoiceLanguage, SenseVoiceEngine, SenseVoiceInferenceParams,
-            SenseVoiceModelParams,
-        },
-        whisper::{WhisperEngine, WhisperInferenceParams},
+        parakeet::{ParakeetModel, ParakeetParams, TimestampGranularity},
+        sense_voice::{SenseVoiceModel, SenseVoiceParams},
+        Quantization,
     },
-    TranscriptionEngine,
+    whisper_cpp::{WhisperEngine, WhisperInferenceParams},
 };
+
+/// Picks the ONNX quantization from the model id. `resolve_model_path` falls
+/// back to the unquantized file when the requested variant is missing.
+fn quantization_for(model_id: &str) -> Quantization {
+    if model_id.contains("int4") {
+        Quantization::Int4
+    } else if model_id.contains("int8") {
+        Quantization::Int8
+    } else if model_id.contains("fp16") {
+        Quantization::FP16
+    } else {
+        Quantization::FP32
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelStateEvent {
@@ -59,10 +69,11 @@ fn conversion_hint_from_settings(settings: &AppSettings) -> ConversionHint {
 
 enum LoadedEngine {
     Whisper(WhisperEngine),
-    Parakeet(ParakeetEngine),
-    Moonshine(MoonshineEngine),
-    MoonshineStreaming(MoonshineStreamingEngine),
-    SenseVoice(SenseVoiceEngine),
+    Parakeet(ParakeetModel),
+    Moonshine(MoonshineModel),
+    MoonshineStreaming(StreamingModel),
+    SenseVoice(SenseVoiceModel),
+    Cohere(CohereModel),
     GeminiApi,
     AppleSpeech,
 }
@@ -180,19 +191,10 @@ impl TranscriptionManager {
         debug!("Starting to unload model");
 
         {
+            // 0.3 models have no unload() method: dropping the engine frees
+            // the ONNX sessions / whisper context.
             let mut engine = self.lock_engine();
-            if let Some(ref mut loaded_engine) = *engine {
-                match loaded_engine {
-                    LoadedEngine::Whisper(ref mut e) => e.unload_model(),
-                    LoadedEngine::Parakeet(ref mut e) => e.unload_model(),
-                    LoadedEngine::Moonshine(ref mut e) => e.unload_model(),
-                    LoadedEngine::MoonshineStreaming(ref mut e) => e.unload_model(),
-                    LoadedEngine::SenseVoice(ref mut e) => e.unload_model(),
-                    LoadedEngine::GeminiApi => {}
-                    LoadedEngine::AppleSpeech => {}
-                }
-            }
-            *engine = None; // Drop the engine to free memory
+            *engine = None;
         }
         {
             let mut current_model = self.current_model_id.lock().unwrap();
@@ -277,8 +279,7 @@ impl TranscriptionManager {
         // Create appropriate engine based on model type
         let loaded_engine = match model_info.engine_type {
             EngineType::Whisper => {
-                let mut engine = WhisperEngine::new();
-                engine.load_model(&model_path).map_err(|e| {
+                let engine = WhisperEngine::load(&model_path).map_err(|e| {
                     let error_msg = format!("Failed to load whisper model {}: {}", model_id, e);
                     let _ = self.app_handle.emit(
                         "model-state-changed",
@@ -294,9 +295,7 @@ impl TranscriptionManager {
                 LoadedEngine::Whisper(engine)
             }
             EngineType::Parakeet => {
-                let mut engine = ParakeetEngine::new();
-                engine
-                    .load_model_with_params(&model_path, ParakeetModelParams::int8())
+                let engine = ParakeetModel::load(&model_path, &quantization_for(model_id))
                     .map_err(|e| {
                         let error_msg =
                             format!("Failed to load parakeet model {}: {}", model_id, e);
@@ -314,13 +313,12 @@ impl TranscriptionManager {
                 LoadedEngine::Parakeet(engine)
             }
             EngineType::Moonshine => {
-                let mut engine = MoonshineEngine::new();
-                engine
-                    .load_model_with_params(
-                        &model_path,
-                        MoonshineModelParams::variant(ModelVariant::Base),
-                    )
-                    .map_err(|e| {
+                let engine = MoonshineModel::load(
+                    &model_path,
+                    MoonshineVariant::Base,
+                    &quantization_for(model_id),
+                )
+                .map_err(|e| {
                         let error_msg =
                             format!("Failed to load moonshine model {}: {}", model_id, e);
                         let _ = self.app_handle.emit(
@@ -337,10 +335,16 @@ impl TranscriptionManager {
                 LoadedEngine::Moonshine(engine)
             }
             EngineType::MoonshineStreaming => {
-                let mut engine = MoonshineStreamingEngine::new();
-                engine
-                    .load_model_with_params(&model_path, StreamingModelParams::default())
-                    .map_err(|e| {
+                let threads = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+                    .min(8);
+                let engine = StreamingModel::load(
+                    &model_path,
+                    threads,
+                    &quantization_for(model_id),
+                )
+                .map_err(|e| {
                         let error_msg = format!(
                             "Failed to load moonshine streaming model {}: {}",
                             model_id, e
@@ -359,9 +363,7 @@ impl TranscriptionManager {
                 LoadedEngine::MoonshineStreaming(engine)
             }
             EngineType::SenseVoice => {
-                let mut engine = SenseVoiceEngine::new();
-                engine
-                    .load_model_with_params(&model_path, SenseVoiceModelParams::int8())
+                let engine = SenseVoiceModel::load(&model_path, &quantization_for(model_id))
                     .map_err(|e| {
                         let error_msg =
                             format!("Failed to load SenseVoice model {}: {}", model_id, e);
@@ -377,6 +379,24 @@ impl TranscriptionManager {
                         anyhow::anyhow!(error_msg)
                     })?;
                 LoadedEngine::SenseVoice(engine)
+            }
+            EngineType::Cohere => {
+                let engine = CohereModel::load(&model_path, &quantization_for(model_id))
+                    .map_err(|e| {
+                        let error_msg =
+                            format!("Failed to load Cohere model {}: {}", model_id, e);
+                        let _ = self.app_handle.emit(
+                            "model-state-changed",
+                            ModelStateEvent {
+                                event_type: "loading_failed".to_string(),
+                                model_id: Some(model_id.to_string()),
+                                model_name: Some(model_info.name.clone()),
+                                error: Some(error_msg.clone()),
+                            },
+                        );
+                        anyhow::anyhow!(error_msg)
+                    })?;
+                LoadedEngine::Cohere(engine)
             }
             EngineType::AppleSpeech => {
                 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -618,17 +638,17 @@ impl TranscriptionManager {
                             };
 
                             whisper_engine
-                                .transcribe_samples(audio, Some(params))
+                                .transcribe_with(&audio, &params)
                                 .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {}", e))
                         }
                         LoadedEngine::Parakeet(parakeet_engine) => {
                             conversion_hint = parakeet_hint;
-                            let params = ParakeetInferenceParams {
-                                timestamp_granularity: TimestampGranularity::Segment,
-                                ..Default::default()
+                            let params = ParakeetParams {
+                                language: None,
+                                timestamp_granularity: Some(TimestampGranularity::Segment),
                             };
                             parakeet_engine
-                                .transcribe_samples(audio, Some(params))
+                                .transcribe_with(&audio, &params)
                                 .map_err(|e| {
                                     anyhow::anyhow!("Parakeet transcription failed: {}", e)
                                 })
@@ -637,13 +657,19 @@ impl TranscriptionManager {
                             // Moonshine is English-only.
                             conversion_hint = ConversionHint::Known(ConversionLanguage::English);
                             moonshine_engine
-                                .transcribe_samples(audio, None)
+                                .transcribe_with(&audio, &MoonshineParams::default())
                                 .map_err(|e| anyhow::anyhow!("Moonshine transcription failed: {}", e))
                         }
                         LoadedEngine::MoonshineStreaming(streaming_engine) => {
                             conversion_hint = ConversionHint::Known(ConversionLanguage::English);
                             streaming_engine
-                                .transcribe_samples(audio, None)
+                                .transcribe_with(
+                                    &audio,
+                                    &MoonshineStreamingParams {
+                                        language: None,
+                                        max_length: None,
+                                    },
+                                )
                                 .map_err(|e| {
                                     anyhow::anyhow!(
                                         "Moonshine streaming transcription failed: {}",
@@ -656,21 +682,38 @@ impl TranscriptionManager {
                             // "auto" falls back to on-text detection.
                             conversion_hint = conversion_hint_from_settings(&settings);
                             let language = match settings.selected_language.as_str() {
-                                "zh" | "zh-Hans" | "zh-Hant" => SenseVoiceLanguage::Chinese,
-                                "en" => SenseVoiceLanguage::English,
-                                "ja" => SenseVoiceLanguage::Japanese,
-                                "ko" => SenseVoiceLanguage::Korean,
-                                "yue" => SenseVoiceLanguage::Cantonese,
-                                _ => SenseVoiceLanguage::Auto,
+                                "zh" | "zh-Hans" | "zh-Hant" => "zh",
+                                "en" => "en",
+                                "ja" => "ja",
+                                "ko" => "ko",
+                                "yue" => "yue",
+                                _ => "auto",
                             };
-                            let params = SenseVoiceInferenceParams {
-                                language,
-                                use_itn: true,
+                            let params = SenseVoiceParams {
+                                language: Some(language.to_string()),
+                                use_itn: Some(true),
                             };
                             sense_voice_engine
-                                .transcribe_samples(audio, Some(params))
+                                .transcribe_with(&audio, &params)
                                 .map_err(|e| {
                                     anyhow::anyhow!("SenseVoice transcription failed: {}", e)
+                                })
+                        }
+                        LoadedEngine::Cohere(cohere_engine) => {
+                            conversion_hint = conversion_hint_from_settings(&settings);
+                            let params = CohereParams {
+                                language: if settings.selected_language == "auto" {
+                                    None
+                                } else {
+                                    Some(settings.selected_language.clone())
+                                },
+                                translate: settings.translate_to_english,
+                                max_new_tokens: None,
+                            };
+                            cohere_engine
+                                .transcribe_with(&audio, &params)
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Cohere transcription failed: {}", e)
                                 })
                         }
                         LoadedEngine::AppleSpeech => {
@@ -802,5 +845,46 @@ impl Drop for TranscriptionManager {
                 debug!("Idle watcher thread joined successfully");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod engine_tests {
+    use super::*;
+
+    /// Manual smoke test for the Cohere ONNX model. Skipped unless both env
+    /// vars are set:
+    ///   COHERE_MODEL_DIR=/path/to/cohere-transcribe-int4 \
+    ///   COHERE_WAV=/path/to/mono16k.wav \
+    ///   cargo test cohere_real_transcription_env -- --nocapture
+    #[test]
+    fn cohere_real_transcription_env() {
+        let (Ok(dir), Ok(wav)) = (
+            std::env::var("COHERE_MODEL_DIR"),
+            std::env::var("COHERE_WAV"),
+        ) else {
+            return;
+        };
+
+        let mut model = CohereModel::load(std::path::Path::new(&dir), &Quantization::Int4)
+            .expect("failed to load cohere model");
+        let mut reader = hound::WavReader::open(&wav).expect("failed to open wav");
+        let spec = reader.spec();
+        let samples: Vec<f32> = reader
+            .samples::<i16>()
+            .map(|s| s.expect("wav sample") as f32 / i16::MAX as f32)
+            .collect();
+
+        let params = CohereParams {
+            language: Some("fr".to_string()),
+            translate: false,
+            max_new_tokens: None,
+        };
+        let result = model
+            .transcribe_with(&samples, &params)
+            .expect("cohere transcription failed");
+        println!("Cohere transcript: {}", result.text);
+        assert!(!result.text.trim().is_empty(), "transcript must not be empty");
+        assert_eq!(spec.sample_rate, 16_000);
     }
 }
