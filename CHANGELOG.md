@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.23] - 2026-10-29
+
+### Added
+
+- **Apple Speech Analyzer engine** (macOS 26+, Apple Silicon): fully on-device system model, zero download, near-instant, French and many languages
+- **Cohere Transcribe engine**: top multilingual accuracy (14 languages incl. French), downloaded file-by-file from Hugging Face
+- **DeepSeek** and **OpenCode Go** post-processing providers
+- Editable **Base URL** for the Custom LLM provider
+- **Number-to-digits conversion** (French/English, opt-in toggle). Verified threshold keeps articles: "un café" stays untouched
+- **API keys stored in the OS keychain** (macOS Keychain / Windows Credential Manager / Secret Service), with a visible fallback indicator when unavailable
+
+### Changed
+
+- **transcribe-rs 0.2 → 0.3**: new speech-model API, per-target GPU features (Metal on macOS, Vulkan on Windows/Linux)
+- Tray icons now use Parler branding instead of the inherited Handy artwork
+
+### Fixed
+
+- Parakeet v3 and other int8 ONNX models failed to load after the transcribe-rs upgrade (quantization is now detected from the model directory)
+- Apple Speech transcribed with an English decoder in "auto" mode: the Tauri bundle reports English as development region, so the app language is now passed explicitly
+- Long-audio model switch is skipped for engines that handle long recordings natively (Apple Speech, Parakeet, Cohere)
+- Pre-existing `llm_client` test build failures
+
 ## [0.3.0] - 2025-07-11
 
 ### Added
