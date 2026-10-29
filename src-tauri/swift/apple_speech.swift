@@ -151,10 +151,21 @@ private func transcribePCM(
     sampleRate: Double,
     localeIdentifier: String
 ) async throws -> String {
+    // Fallback chain: requested locale -> system locale -> first supported.
+    // The caller normally passes an explicit language; Locale.current is only
+    // a last resort because a Tauri bundle without CFBundleLocalizations
+    // reports the development region (English) rather than the user's system.
     let requestedLocale = localeIdentifier.isEmpty
         ? Locale.current
         : Locale(identifier: localeIdentifier)
-    guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: requestedLocale) else {
+    var locale = await SpeechTranscriber.supportedLocale(equivalentTo: requestedLocale)
+    if locale == nil, localeIdentifier.isEmpty == false {
+        locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current)
+    }
+    if locale == nil {
+        locale = await SpeechTranscriber.supportedLocales.first
+    }
+    guard let locale else {
         throw SpeechBridgeError.localeUnsupported(localeIdentifier)
     }
 

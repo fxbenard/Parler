@@ -722,12 +722,17 @@ impl TranscriptionManager {
                         LoadedEngine::AppleSpeech => {
                             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
                             {
-                                conversion_hint = conversion_hint_from_settings(&settings);
+                                // Never rely on Locale.current inside the app
+                                // bundle: a Tauri app without CFBundleLocalizations
+                                // reports the development region (English), so
+                                // "auto" must use the app's UI language instead.
                                 let locale = if settings.selected_language == "auto" {
-                                    String::new()
+                                    settings.app_language.clone()
                                 } else {
                                     settings.selected_language.clone()
                                 };
+                                conversion_hint = map_selected_language(&locale)
+                                    .unwrap_or(ConversionHint::Detect);
                                 crate::apple_speech::transcribe(
                                     &audio,
                                     crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE,

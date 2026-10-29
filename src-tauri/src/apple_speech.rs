@@ -127,7 +127,8 @@ mod tests {
             .samples::<i16>()
             .map(|s| s.expect("wav sample") as f32 / i16::MAX as f32)
             .collect();
-        let text = transcribe(&samples, spec.sample_rate, "fr").expect("transcription failed");
+        let locale = std::env::var("APPLE_SPEECH_LOCALE").unwrap_or_else(|_| "fr".to_string());
+        let text = transcribe(&samples, spec.sample_rate, &locale).expect("transcription failed");
         println!("Apple Speech transcript: {text}");
         assert!(!text.trim().is_empty(), "transcript must not be empty");
     }
