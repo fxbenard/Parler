@@ -1,6 +1,12 @@
+include!("build_apple_speech.rs");
+
 fn main() {
+    println!("cargo:rerun-if-changed=build_apple_speech.rs");
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    build_apple_intelligence_bridge();
+    {
+        build_apple_intelligence_bridge();
+        build_apple_speech_bridge();
+    }
 
     generate_tray_translations();
 

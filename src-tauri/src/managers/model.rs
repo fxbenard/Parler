@@ -24,6 +24,7 @@ pub enum EngineType {
     MoonshineStreaming,
     SenseVoice,
     GeminiApi,
+    AppleSpeech,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -423,6 +424,36 @@ impl ModelManager {
             },
         );
 
+        // Apple Speech: fully on-device, uses the system model (no download).
+        // Only offered when the OS, SDK and hardware support SpeechAnalyzer.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        if crate::apple_speech::is_available() {
+            available_models.insert(
+                "apple-speech".to_string(),
+                ModelInfo {
+                    id: "apple-speech".to_string(),
+                    name: "Apple Speech (System)".to_string(),
+                    description:
+                        "On-device macOS speech model. No download, near-instant, private."
+                            .to_string(),
+                    filename: "".to_string(),
+                    url: None,
+                    size_mb: 0,
+                    is_downloaded: true,
+                    is_downloading: false,
+                    partial_size: 0,
+                    is_directory: false,
+                    engine_type: EngineType::AppleSpeech,
+                    accuracy_score: 0.85,
+                    speed_score: 1.0,
+                    supports_translation: false,
+                    is_recommended: false,
+                    supported_languages: crate::apple_speech::supported_languages(),
+                    is_custom: false,
+                },
+            );
+        }
+
         // Auto-discover custom Whisper models (.bin files) in the models directory
         if let Err(e) = Self::discover_custom_whisper_models(&models_dir, &mut available_models) {
             warn!("Failed to discover custom models: {}", e);
@@ -489,7 +520,7 @@ impl ModelManager {
         let mut models = self.available_models.lock().unwrap();
 
         for model in models.values_mut() {
-            if matches!(model.engine_type, EngineType::GeminiApi) {
+            if matches!(model.engine_type, EngineType::GeminiApi | EngineType::AppleSpeech) {
                 continue;
             }
             if model.is_directory {
@@ -565,7 +596,8 @@ impl ModelManager {
         if settings.selected_model.is_empty() {
             let models = self.available_models.lock().unwrap();
             if let Some(available_model) = models.values().find(|model| {
-                model.is_downloaded && !matches!(model.engine_type, EngineType::GeminiApi)
+                model.is_downloaded
+                    && !matches!(model.engine_type, EngineType::GeminiApi | EngineType::AppleSpeech)
             }) {
                 info!(
                     "Auto-selecting model: {} ({})",
@@ -712,7 +744,7 @@ impl ModelManager {
         let model_info =
             model_info.ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
 
-        if matches!(model_info.engine_type, EngineType::GeminiApi) {
+        if matches!(model_info.engine_type, EngineType::GeminiApi | EngineType::AppleSpeech) {
             return Ok(());
         }
 
@@ -1068,8 +1100,8 @@ impl ModelManager {
         let model_info =
             model_info.ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
 
-        if matches!(model_info.engine_type, EngineType::GeminiApi) {
-            return Err(anyhow::anyhow!("Cannot delete cloud model"));
+        if matches!(model_info.engine_type, EngineType::GeminiApi | EngineType::AppleSpeech) {
+            return Err(anyhow::anyhow!("Cannot delete a built-in model"));
         }
 
         debug!("ModelManager: Found model info: {:?}", model_info);
@@ -1136,9 +1168,9 @@ impl ModelManager {
             .get_model_info(model_id)
             .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
 
-        if matches!(model_info.engine_type, EngineType::GeminiApi) {
+        if matches!(model_info.engine_type, EngineType::GeminiApi | EngineType::AppleSpeech) {
             return Err(anyhow::anyhow!(
-                "Cloud model has no local path: {}",
+                "Built-in model has no local path: {}",
                 model_id
             ));
         }

@@ -64,6 +64,7 @@ enum LoadedEngine {
     MoonshineStreaming(MoonshineStreamingEngine),
     SenseVoice(SenseVoiceEngine),
     GeminiApi,
+    AppleSpeech,
 }
 
 #[derive(Clone)]
@@ -188,6 +189,7 @@ impl TranscriptionManager {
                     LoadedEngine::MoonshineStreaming(ref mut e) => e.unload_model(),
                     LoadedEngine::SenseVoice(ref mut e) => e.unload_model(),
                     LoadedEngine::GeminiApi => {}
+                    LoadedEngine::AppleSpeech => {}
                 }
             }
             *engine = None; // Drop the engine to free memory
@@ -263,7 +265,10 @@ impl TranscriptionManager {
             return Err(anyhow::anyhow!(error_msg));
         }
 
-        let model_path = if matches!(model_info.engine_type, EngineType::GeminiApi) {
+        let model_path = if matches!(
+            model_info.engine_type,
+            EngineType::GeminiApi | EngineType::AppleSpeech
+        ) {
             std::path::PathBuf::new()
         } else {
             self.model_manager.get_model_path(model_id)?
@@ -372,6 +377,18 @@ impl TranscriptionManager {
                         anyhow::anyhow!(error_msg)
                     })?;
                 LoadedEngine::SenseVoice(engine)
+            }
+            EngineType::AppleSpeech => {
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                {
+                    LoadedEngine::AppleSpeech
+                }
+                #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                {
+                    return Err(anyhow::anyhow!(
+                        "Apple Speech is only available on Apple Silicon macOS"
+                    ));
+                }
             }
             EngineType::GeminiApi => {
                 let settings = get_settings(&self.app_handle);
@@ -655,6 +672,35 @@ impl TranscriptionManager {
                                 .map_err(|e| {
                                     anyhow::anyhow!("SenseVoice transcription failed: {}", e)
                                 })
+                        }
+                        LoadedEngine::AppleSpeech => {
+                            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                            {
+                                conversion_hint = conversion_hint_from_settings(&settings);
+                                let locale = if settings.selected_language == "auto" {
+                                    String::new()
+                                } else {
+                                    settings.selected_language.clone()
+                                };
+                                crate::apple_speech::transcribe(
+                                    &audio,
+                                    crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE,
+                                    &locale,
+                                )
+                                .map(|text| transcribe_rs::TranscriptionResult {
+                                    text,
+                                    segments: None,
+                                })
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Apple Speech transcription failed: {}", e)
+                                })
+                            }
+                            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                            {
+                                Err(anyhow::anyhow!(
+                                    "Apple Speech is only available on Apple Silicon macOS"
+                                ))
+                            }
                         }
                         LoadedEngine::GeminiApi => {
                             unreachable!("GeminiApi handled before catch_unwind")
