@@ -32,11 +32,13 @@ const ProcessingModelsSection: React.FC = () => {
     refreshSettings,
     fetchPostProcessModels,
     updatePostProcessApiKey,
+    updatePostProcessBaseUrl,
     postProcessModelOptions,
   } = useSettings();
   const [isAdding, setIsAdding] = useState(false);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [isFetching, setIsFetching] = useState(false);
 
@@ -60,6 +62,10 @@ const ProcessingModelsSection: React.FC = () => {
       setSelectedModel("");
       const existingKey = settings?.post_process_api_keys?.[providerId] ?? "";
       setApiKey(existingKey);
+      const provider = settings?.post_process_providers?.find(
+        (p) => p.id === providerId,
+      );
+      setBaseUrl(provider?.base_url ?? "");
     },
     [settings],
   );
@@ -68,6 +74,15 @@ const ProcessingModelsSection: React.FC = () => {
     if (!selectedProviderId) return;
     if (apiKey.trim()) {
       await updatePostProcessApiKey(selectedProviderId, apiKey.trim());
+    }
+    const provider = providers.find((p) => p.id === selectedProviderId);
+    const trimmedBaseUrl = baseUrl.trim();
+    if (
+      provider?.allow_base_url_edit &&
+      trimmedBaseUrl &&
+      trimmedBaseUrl !== provider.base_url
+    ) {
+      await updatePostProcessBaseUrl(selectedProviderId, trimmedBaseUrl);
     }
     setIsFetching(true);
     try {
@@ -78,13 +93,24 @@ const ProcessingModelsSection: React.FC = () => {
   }, [
     selectedProviderId,
     apiKey,
+    baseUrl,
+    providers,
     fetchPostProcessModels,
     updatePostProcessApiKey,
+    updatePostProcessBaseUrl,
   ]);
 
   const handleSave = useCallback(async () => {
     if (!selectedProviderId || !selectedModel) return;
     const provider = providers.find((p) => p.id === selectedProviderId);
+    const trimmedBaseUrl = baseUrl.trim();
+    if (
+      provider?.allow_base_url_edit &&
+      trimmedBaseUrl &&
+      trimmedBaseUrl !== provider.base_url
+    ) {
+      await updatePostProcessBaseUrl(selectedProviderId, trimmedBaseUrl);
+    }
     const label = `${provider?.label || selectedProviderId} / ${selectedModel}`;
     try {
       await commands.addSavedProcessingModel(
@@ -100,7 +126,14 @@ const ProcessingModelsSection: React.FC = () => {
     } catch (error) {
       console.error("Failed to save processing model:", error);
     }
-  }, [selectedProviderId, selectedModel, providers, refreshSettings]);
+  }, [
+    selectedProviderId,
+    selectedModel,
+    baseUrl,
+    providers,
+    updatePostProcessBaseUrl,
+    refreshSettings,
+  ]);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -119,6 +152,7 @@ const ProcessingModelsSection: React.FC = () => {
     setSelectedProviderId("");
     setSelectedModel("");
     setApiKey("");
+    setBaseUrl("");
   }, []);
 
   return (
@@ -170,6 +204,23 @@ const ProcessingModelsSection: React.FC = () => {
 
           {selectedProviderId && (
             <>
+              {providers.find((p) => p.id === selectedProviderId)
+                ?.allow_base_url_edit && (
+                <div className="space-y-1">
+                  <label className="text-sm font-semibold">
+                    {t("settings.models.processingModels.baseUrl")}
+                  </label>
+                  <Input
+                    type="text"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder={t(
+                      "settings.models.processingModels.baseUrlPlaceholder",
+                    )}
+                    variant="compact"
+                  />
+                </div>
+              )}
               <div className="space-y-1">
                 <label className="text-sm font-semibold">
                   {t("settings.models.processingModels.apiKey")}

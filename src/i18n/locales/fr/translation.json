@@ -175,7 +175,9 @@
         "save": "Enregistrer",
         "cancel": "Annuler",
         "fetchModels": "Récupérer les modèles",
-        "alreadySaved": "Ce modèle est déjà sauvegardé."
+        "alreadySaved": "Ce modèle est déjà sauvegardé.",
+        "baseUrl": "URL de base",
+        "baseUrlPlaceholder": "https://opencode.ai/inference/go/openai/v1"
       }
     },
     "general": {

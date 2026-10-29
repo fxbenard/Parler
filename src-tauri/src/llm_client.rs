@@ -1,8 +1,11 @@
 use crate::settings::{PostProcessProvider, PROVIDER_ID_ANTHROPIC, PROVIDER_ID_GEMINI};
 use log::debug;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, REFERER, USER_AGENT};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, REFERER, USER_AGENT,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -53,6 +56,19 @@ struct ChatMessageResponse {
     content: Option<String>,
 }
 
+/// Stable per-process routing hint required by OpenCode gateways.
+/// Requests without it are rejected with `MissingSessionID`.
+fn opencode_session_id() -> &'static str {
+    static SESSION: OnceLock<String> = OnceLock::new();
+    SESSION.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        format!("parler-{}-{:x}", std::process::id(), nanos)
+    })
+}
+
 /// Build headers for API requests based on provider type
 fn build_headers(provider: &PostProcessProvider, api_key: &str) -> Result<HeaderMap, String> {
     let mut headers = HeaderMap::new();
@@ -81,6 +97,16 @@ fn build_headers(provider: &PostProcessProvider, api_key: &str) -> Result<Header
                     .map_err(|e| format!("Invalid authorization header value: {}", e))?,
             );
         }
+    }
+
+    // OpenCode Go requires a stable session id for routing and prompt caching
+    // (https://opencode.ai/v2/docs/console/go/).
+    if provider.base_url.contains("opencode.ai") {
+        headers.insert(
+            HeaderName::from_static("x-opencode-session"),
+            HeaderValue::from_str(opencode_session_id())
+                .map_err(|e| format!("Invalid session header value: {}", e))?,
+        );
     }
 
     Ok(headers)
@@ -382,6 +408,20 @@ mod tests {
         assert_eq!(headers.get("anthropic-version").unwrap(), "2023-06-01");
         // Should NOT have Bearer auth
         assert!(headers.get(AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn build_headers_adds_opencode_session_for_opencode_gateway() {
+        let provider = make_provider("custom", "https://opencode.ai/inference/go/openai/v1");
+        let headers = build_headers(&provider, "key").unwrap();
+        assert!(headers.contains_key("x-opencode-session"));
+    }
+
+    #[test]
+    fn build_headers_omits_opencode_session_for_other_gateways() {
+        let provider = make_provider("custom", "http://localhost:11434/v1");
+        let headers = build_headers(&provider, "key").unwrap();
+        assert!(!headers.contains_key("x-opencode-session"));
     }
 
     #[test]

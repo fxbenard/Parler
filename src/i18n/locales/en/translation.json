@@ -236,7 +236,9 @@
         "save": "Save",
         "cancel": "Cancel",
         "fetchModels": "Fetch models",
-        "alreadySaved": "This model is already saved."
+        "alreadySaved": "This model is already saved.",
+        "baseUrl": "Base URL",
+        "baseUrlPlaceholder": "https://opencode.ai/inference/go/openai/v1"
       }
     },
     "sound": {
