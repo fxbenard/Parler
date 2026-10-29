@@ -502,6 +502,14 @@ fn default_post_process_providers() -> Vec<PostProcessProvider> {
             supports_structured_output: true,
         },
         PostProcessProvider {
+            id: "deepseek".to_string(),
+            label: "DeepSeek".to_string(),
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            allow_base_url_edit: false,
+            models_endpoint: Some("/models".to_string()),
+            supports_structured_output: false,
+        },
+        PostProcessProvider {
             id: "zai".to_string(),
             label: "Z.AI".to_string(),
             base_url: "https://api.z.ai/api/paas/v4".to_string(),
@@ -516,6 +524,16 @@ fn default_post_process_providers() -> Vec<PostProcessProvider> {
             allow_base_url_edit: false,
             models_endpoint: Some("/models".to_string()),
             supports_structured_output: true,
+        },
+        PostProcessProvider {
+            id: "opencode-go".to_string(),
+            label: "OpenCode Go".to_string(),
+            base_url: "https://opencode.ai/inference/go/openai/v1".to_string(),
+            allow_base_url_edit: false,
+            // The Go gateway has no /models endpoint; the UI falls back to
+            // manual model entry (e.g. deepseek-v4.1-flash).
+            models_endpoint: Some("/models".to_string()),
+            supports_structured_output: false,
         },
         PostProcessProvider {
             id: "anthropic".to_string(),
@@ -1118,6 +1136,32 @@ mod tests {
     }
 
     // ── Keychain secret migration / stripping ────────────────────────────
+
+    #[test]
+    fn defaults_include_deepseek_and_opencode_go_providers() {
+        let providers = default_post_process_providers();
+        let ids: Vec<&str> = providers.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.contains(&"deepseek"));
+        assert!(ids.contains(&"opencode-go"));
+        let go = providers.iter().find(|p| p.id == "opencode-go").unwrap();
+        assert_eq!(go.base_url, "https://opencode.ai/inference/go/openai/v1");
+    }
+
+    #[test]
+    fn ensure_defaults_adds_missing_providers_to_existing_settings() {
+        let mut settings = get_default_settings();
+        settings.post_process_providers.retain(|p| {
+            p.id != "deepseek" && p.id != "opencode-go"
+        });
+        assert!(ensure_post_process_defaults(&mut settings));
+        let ids: Vec<&str> = settings
+            .post_process_providers
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(ids.contains(&"deepseek"));
+        assert!(ids.contains(&"opencode-go"));
+    }
 
     #[test]
     fn extract_legacy_secrets_filters_empty_values() {
