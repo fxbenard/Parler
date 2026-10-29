@@ -15,6 +15,7 @@
 
 - **transcribe-rs 0.2 → 0.3**: new speech-model API, per-target GPU features (Metal on macOS, Vulkan on Windows/Linux)
 - Tray icons now use Parler branding instead of the inherited Handy artwork
+- Linux builds are produced on Ubuntu 24.04: the ONNX Runtime prebuilt requires **glibc 2.39+** (Ubuntu 24.04 / Debian 13 or newer)
 
 ### Fixed
 

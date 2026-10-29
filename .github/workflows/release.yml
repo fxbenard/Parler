@@ -52,11 +52,10 @@ jobs:
           - platform: "macos-latest" # for Intel based macs.
             args: "--target x86_64-apple-darwin"
             target: "x86_64-apple-darwin"
-          - platform: "ubuntu-22.04" # Build .deb on 22.04
-            args: "--bundles deb"
-            target: "x86_64-unknown-linux-gnu"
-          - platform: "ubuntu-24.04" # Build AppImage and RPM on 24.04
-            args: "--bundles appimage,rpm"
+          # .deb/AppImage/RPM are built on 24.04: the prebuilt ONNX Runtime
+          # static archive requires glibc >= 2.38 (22.04 ships 2.35).
+          - platform: "ubuntu-24.04"
+            args: "--bundles appimage,rpm,deb"
             target: "x86_64-unknown-linux-gnu"
           - platform: "ubuntu-24.04-arm" # Build for ARM64 Linux
             args: "--bundles appimage,deb,rpm"
