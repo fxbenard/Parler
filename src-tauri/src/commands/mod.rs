@@ -15,6 +15,14 @@ pub fn cancel_operation(app: AppHandle) {
     cancel_current_operation(&app);
 }
 
+/// True when API keys are stored in the OS keychain, false when the app
+/// fell back to plaintext storage (Linux without a Secret Service).
+#[tauri::command]
+#[specta::specta]
+pub fn get_secrets_backend_status() -> bool {
+    crate::secrets::is_available()
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn toggle_pause(app: AppHandle) -> bool {

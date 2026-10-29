@@ -971,7 +971,16 @@ pub fn change_post_process_api_key_setting(
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
-    settings.post_process_api_keys.insert(provider_id, api_key);
+    let api_key = api_key.trim().to_string();
+
+    // Keychain first when available; empty value deletes the entry.
+    // On fallback, the plaintext stays in the settings file.
+    if settings::try_store_secret(&crate::secrets::provider_api_key_name(&provider_id), &api_key) {
+        settings.post_process_api_keys.remove(&provider_id);
+    } else {
+        settings.post_process_api_keys.insert(provider_id, api_key);
+    }
+
     settings::write_settings(&app, settings);
     Ok(())
 }

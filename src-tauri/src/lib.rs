@@ -316,6 +316,7 @@ pub fn run(cli_args: CliArgs) {
         shortcut::handy_keys::stop_handy_keys_recording,
         trigger_update_check,
         commands::cancel_operation,
+        commands::get_secrets_backend_status,
         commands::toggle_pause,
         commands::get_app_dir_path,
         commands::get_app_settings,
@@ -436,6 +437,11 @@ pub fn run(cli_args: CliArgs) {
         ))
         .manage(cli_args.clone())
         .setup(move |app| {
+            // MUST run before any settings read/write: the write path strips
+            // secret fields, so an early rewrite would destroy legacy
+            // plaintext keys before they are migrated to the keychain.
+            settings::migrate_legacy_secrets(&app.handle());
+
             let mut settings = get_settings(&app.handle());
 
             // CLI --debug flag overrides debug_mode and log level (runtime-only, not persisted)

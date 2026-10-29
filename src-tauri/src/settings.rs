@@ -1,4 +1,4 @@
-use log::{debug, warn};
+use log::{debug, info, warn};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use specta::Type;
@@ -845,7 +845,159 @@ impl AppSettings {
     }
 }
 
+/// Collects plaintext API keys from a raw settings JSON value.
+/// Empty/whitespace values and nulls are ignored. Pure function so the
+/// migration logic is unit-testable without a keychain or an AppHandle.
+fn extract_legacy_secrets(value: &serde_json::Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+
+    if let Some(map) = value
+        .get("post_process_api_keys")
+        .and_then(|v| v.as_object())
+    {
+        for (provider_id, raw) in map {
+            if let Some(s) = raw.as_str() {
+                let s = s.trim();
+                if !s.is_empty() {
+                    out.push((crate::secrets::provider_api_key_name(provider_id), s.to_string()));
+                }
+            }
+        }
+    }
+
+    if let Some(s) = value.get("gemini_api_key").and_then(|v| v.as_str()) {
+        let s = s.trim();
+        if !s.is_empty() {
+            out.push((crate::secrets::GEMINI_API_KEY.to_string(), s.to_string()));
+        }
+    }
+
+    out
+}
+
+/// Removes the secret fields from a settings JSON value in place.
+/// Returns true when at least one field was present. Pure function.
+fn strip_secret_fields(value: &mut serde_json::Value) -> bool {
+    match value.as_object_mut() {
+        Some(obj) => {
+            let a = obj.remove("post_process_api_keys").is_some();
+            let b = obj.remove("gemini_api_key").is_some();
+            a || b
+        }
+        None => false,
+    }
+}
+
+/// Serializes settings for the store, stripping secret fields when the OS
+/// keychain is available. In plaintext fallback mode the fields are kept so
+/// the feature still works without a keychain.
+fn settings_to_value(settings: &AppSettings) -> serde_json::Value {
+    let mut value = serde_json::to_value(settings).unwrap();
+    if crate::secrets::is_available() {
+        strip_secret_fields(&mut value);
+    }
+    value
+}
+
+/// Overlays keychain-stored secrets onto a settings struct. No-op in
+/// plaintext fallback mode, where the values already live in the JSON.
+fn merge_secrets_into(settings: &mut AppSettings) {
+    if !crate::secrets::is_available() {
+        return;
+    }
+
+    let mut provider_keys = HashMap::new();
+    for provider in &settings.post_process_providers {
+        if let Some(secret) =
+            crate::secrets::get_secret(&crate::secrets::provider_api_key_name(&provider.id))
+        {
+            provider_keys.insert(provider.id.clone(), secret);
+        }
+    }
+    settings.post_process_api_keys = provider_keys;
+    settings.gemini_api_key = crate::secrets::get_secret(crate::secrets::GEMINI_API_KEY);
+}
+
+/// Tries to store a secret in the OS keychain. Returns true when the keychain
+/// handled it — the caller must then keep the plaintext out of the settings
+/// struct. Returns false when the keychain is unavailable or failed, in which
+/// case the caller falls back to plaintext storage.
+pub fn try_store_secret(name: &str, value: &str) -> bool {
+    if !crate::secrets::is_available() {
+        return false;
+    }
+    match crate::secrets::set_secret(name, value) {
+        Ok(()) => true,
+        Err(e) => {
+            warn!("Failed to store secret '{}' in the OS keychain: {}", name, e);
+            false
+        }
+    }
+}
+
+/// Migrates legacy plaintext API keys from the settings JSON into the OS
+/// keychain.
+///
+/// All-or-nothing and idempotent: every key is written and verified with an
+/// uncached read-back first; the JSON is only cleaned once every key passed.
+/// On any failure the JSON is left untouched so the migration retries on the
+/// next launch. Must run before any settings read/write that could rewrite
+/// the store (the write path strips secret fields).
+pub fn migrate_legacy_secrets(app: &AppHandle) {
+    let Ok(store) = app.store(SETTINGS_STORE_PATH) else {
+        return;
+    };
+    let Some(mut value) = store.get("settings") else {
+        return;
+    };
+
+    let legacy = extract_legacy_secrets(&value);
+    if legacy.is_empty() {
+        return;
+    }
+
+    if !crate::secrets::is_available() {
+        warn!(
+            "Found {} legacy plaintext API key(s) but the OS keychain is unavailable; keeping them in the settings file",
+            legacy.len()
+        );
+        return;
+    }
+
+    for (key, expected) in &legacy {
+        if let Err(e) = crate::secrets::set_secret(key, expected) {
+            warn!(
+                "Secret migration aborted ({}); plaintext kept for retry on next launch",
+                e
+            );
+            return;
+        }
+        match crate::secrets::read_through(key) {
+            Ok(Some(stored)) if stored == *expected => {}
+            other => {
+                warn!(
+                    "Secret migration aborted: read-back mismatch for '{}' ({:?}); plaintext kept",
+                    key, other
+                );
+                return;
+            }
+        }
+    }
+
+    strip_secret_fields(&mut value);
+    let _ = store.set("settings", value);
+    info!(
+        "Migrated {} legacy API key(s) to the OS keychain",
+        legacy.len()
+    );
+}
+
 pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
+    // Migration must precede every settings read/write: the write path strips
+    // secret fields, so an early rewrite would destroy the legacy plaintext
+    // before it is migrated.
+    migrate_legacy_secrets(app);
+
     // Initialize store
     let store = app
         .store(SETTINGS_STORE_PATH)
@@ -870,7 +1022,7 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
 
                 if updated {
                     debug!("Settings updated with new bindings");
-                    store.set("settings", serde_json::to_value(&settings).unwrap());
+                    store.set("settings", settings_to_value(&settings));
                 }
 
                 settings
@@ -879,20 +1031,21 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                 warn!("Failed to parse settings: {}", e);
                 // Fall back to default settings if parsing fails
                 let default_settings = get_default_settings();
-                store.set("settings", serde_json::to_value(&default_settings).unwrap());
+                store.set("settings", settings_to_value(&default_settings));
                 default_settings
             }
         }
     } else {
         let default_settings = get_default_settings();
-        store.set("settings", serde_json::to_value(&default_settings).unwrap());
+        store.set("settings", settings_to_value(&default_settings));
         default_settings
     };
 
     if ensure_post_process_defaults(&mut settings) {
-        store.set("settings", serde_json::to_value(&settings).unwrap());
+        store.set("settings", settings_to_value(&settings));
     }
 
+    merge_secrets_into(&mut settings);
     settings
 }
 
@@ -904,19 +1057,20 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     let mut settings = if let Some(settings_value) = store.get("settings") {
         serde_json::from_value::<AppSettings>(settings_value).unwrap_or_else(|_| {
             let default_settings = get_default_settings();
-            store.set("settings", serde_json::to_value(&default_settings).unwrap());
+            store.set("settings", settings_to_value(&default_settings));
             default_settings
         })
     } else {
         let default_settings = get_default_settings();
-        store.set("settings", serde_json::to_value(&default_settings).unwrap());
+        store.set("settings", settings_to_value(&default_settings));
         default_settings
     };
 
     if ensure_post_process_defaults(&mut settings) {
-        store.set("settings", serde_json::to_value(&settings).unwrap());
+        store.set("settings", settings_to_value(&settings));
     }
 
+    merge_secrets_into(&mut settings);
     settings
 }
 
@@ -925,7 +1079,7 @@ pub fn write_settings(app: &AppHandle, settings: AppSettings) {
         .store(SETTINGS_STORE_PATH)
         .expect("Failed to initialize store");
 
-    store.set("settings", serde_json::to_value(&settings).unwrap());
+    store.set("settings", settings_to_value(&settings));
 }
 
 pub fn get_bindings(app: &AppHandle) -> HashMap<String, ShortcutBinding> {
@@ -961,5 +1115,62 @@ mod tests {
         let settings = get_default_settings();
         assert!(!settings.auto_submit);
         assert_eq!(settings.auto_submit_key, AutoSubmitKey::Enter);
+    }
+
+    // ── Keychain secret migration / stripping ────────────────────────────
+
+    #[test]
+    fn extract_legacy_secrets_filters_empty_values() {
+        let value = serde_json::json!({
+            "post_process_api_keys": {
+                "openai": "",
+                "anthropic": "   ",
+                "custom": "sk-valid",
+            },
+            "gemini_api_key": ""
+        });
+        let legacy = extract_legacy_secrets(&value);
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].0, crate::secrets::provider_api_key_name("custom"));
+        assert_eq!(legacy[0].1, "sk-valid");
+    }
+
+    #[test]
+    fn extract_legacy_secrets_collects_both_sources() {
+        let value = serde_json::json!({
+            "post_process_api_keys": { "openai": "sk-1" },
+            "gemini_api_key": "gm-1"
+        });
+        let mut legacy = extract_legacy_secrets(&value);
+        legacy.sort();
+        assert_eq!(legacy.len(), 2);
+        assert!(legacy.iter().any(|(k, v)| k.ends_with("gemini_api_key") && v == "gm-1"));
+        assert!(legacy.iter().any(|(k, v)| k.ends_with("openai") && v == "sk-1"));
+    }
+
+    #[test]
+    fn extract_legacy_secrets_absent_fields() {
+        let value = serde_json::json!({ "translate_to_english": false });
+        assert!(extract_legacy_secrets(&value).is_empty());
+    }
+
+    #[test]
+    fn strip_secret_fields_removes_both() {
+        let mut value = serde_json::json!({
+            "post_process_api_keys": { "openai": "sk-1" },
+            "gemini_api_key": "gm-1",
+            "app_language": "fr"
+        });
+        assert!(strip_secret_fields(&mut value));
+        assert!(value.get("post_process_api_keys").is_none());
+        assert!(value.get("gemini_api_key").is_none());
+        assert_eq!(value.get("app_language").unwrap(), "fr");
+    }
+
+    #[test]
+    fn strip_secret_fields_noop_when_absent() {
+        let mut value = serde_json::json!({ "app_language": "fr" });
+        assert!(!strip_secret_fields(&mut value));
+        assert_eq!(value.get("app_language").unwrap(), "fr");
     }
 }

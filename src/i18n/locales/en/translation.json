@@ -366,6 +366,10 @@
         "add": "Add",
         "remove": "Remove {{word}}",
         "duplicate": "\"{{word}}\" already exists"
+      },
+      "secretStorageWarning": {
+        "title": "API keys are stored in plain text",
+        "description": "The system keychain is unavailable on this machine, so LLM API keys are kept in the settings file. Use a throwaway key or install a Secret Service provider (gnome-keyring, kwallet) to secure them."
       }
     },
     "postProcessing": {

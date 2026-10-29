@@ -436,6 +436,13 @@ async triggerUpdateCheck() : Promise<Result<null, string>> {
 async cancelOperation() : Promise<void> {
     await TAURI_INVOKE("cancel_operation");
 },
+/**
+ * True when API keys are stored in the OS keychain, false when the app
+ * fell back to plaintext storage (Linux without a Secret Service).
+ */
+async getSecretsBackendStatus() : Promise<boolean> {
+    return await TAURI_INVOKE("get_secrets_backend_status");
+},
 async togglePause() : Promise<boolean> {
     return await TAURI_INVOKE("toggle_pause");
 },

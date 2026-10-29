@@ -360,6 +360,10 @@
         "add": "Ajouter",
         "remove": "Supprimer {{word}}",
         "duplicate": "\"{{word}}\" existe déjà"
+      },
+      "secretStorageWarning": {
+        "title": "Clés API stockées en clair",
+        "description": "Le trousseau système n'est pas disponible sur cette machine : les clés API LLM sont conservées dans le fichier de réglages. Utilise une clé jetable ou installe un fournisseur Secret Service (gnome-keyring, kwallet) pour les sécuriser."
       }
     },
     "postProcessing": {

@@ -14,6 +14,7 @@ import { AutoSubmit } from "../AutoSubmit";
 
 import { AppendTrailingSpace } from "../AppendTrailingSpace";
 import { ConvertNumbers } from "../ConvertNumbers";
+import { SecretStorageWarning } from "../SecretStorageWarning";
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
 import { ExperimentalToggle } from "../ExperimentalToggle";
@@ -27,6 +28,8 @@ export const AdvancedSettings: React.FC = () => {
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
+      <SecretStorageWarning />
+
       <SettingsGroup title={t("settings.advanced.groups.app")}>
         <StartHidden descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />

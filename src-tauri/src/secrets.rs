@@ -173,6 +173,12 @@ pub fn delete_secret(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reads straight from the backend, bypassing the cache. Used by the legacy
+/// migration to verify what the keychain actually stored.
+pub fn read_through(key: &str) -> Result<Option<String>, String> {
+    store().get(key)
+}
+
 /// Returns the value for every requested key, going through the cache.
 pub fn get_many(keys: &[String]) -> HashMap<String, String> {
     let mut out = HashMap::new();
