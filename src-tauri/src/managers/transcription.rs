@@ -26,17 +26,20 @@ use transcribe_rs::{
     whisper_cpp::{WhisperEngine, WhisperInferenceParams},
 };
 
-/// Picks the ONNX quantization from the model id. `resolve_model_path` falls
-/// back to the unquantized file when the requested variant is missing.
-fn quantization_for(model_id: &str) -> Quantization {
-    if model_id.contains("int4") {
+/// Picks the ONNX quantization from the model's directory name (the model id
+/// and the filename can differ, e.g. id `parakeet-tdt-0.6b-v3` vs directory
+/// `parakeet-tdt-0.6b-v3-int8`).
+///
+/// Int8 is the safe default: `resolve_model_path` falls back to the
+/// unquantized file when no int8 variant exists, but it never upgrades a
+/// plain request to a quantized file.
+fn quantization_for(model_filename: &str) -> Quantization {
+    if model_filename.contains("int4") {
         Quantization::Int4
-    } else if model_id.contains("int8") {
-        Quantization::Int8
-    } else if model_id.contains("fp16") {
+    } else if model_filename.contains("fp16") {
         Quantization::FP16
     } else {
-        Quantization::FP32
+        Quantization::Int8
     }
 }
 
@@ -295,7 +298,7 @@ impl TranscriptionManager {
                 LoadedEngine::Whisper(engine)
             }
             EngineType::Parakeet => {
-                let engine = ParakeetModel::load(&model_path, &quantization_for(model_id))
+                let engine = ParakeetModel::load(&model_path, &quantization_for(&model_info.filename))
                     .map_err(|e| {
                         let error_msg =
                             format!("Failed to load parakeet model {}: {}", model_id, e);
@@ -316,7 +319,7 @@ impl TranscriptionManager {
                 let engine = MoonshineModel::load(
                     &model_path,
                     MoonshineVariant::Base,
-                    &quantization_for(model_id),
+                    &quantization_for(&model_info.filename),
                 )
                 .map_err(|e| {
                         let error_msg =
@@ -342,7 +345,7 @@ impl TranscriptionManager {
                 let engine = StreamingModel::load(
                     &model_path,
                     threads,
-                    &quantization_for(model_id),
+                    &quantization_for(&model_info.filename),
                 )
                 .map_err(|e| {
                         let error_msg = format!(
@@ -363,7 +366,7 @@ impl TranscriptionManager {
                 LoadedEngine::MoonshineStreaming(engine)
             }
             EngineType::SenseVoice => {
-                let engine = SenseVoiceModel::load(&model_path, &quantization_for(model_id))
+                let engine = SenseVoiceModel::load(&model_path, &quantization_for(&model_info.filename))
                     .map_err(|e| {
                         let error_msg =
                             format!("Failed to load SenseVoice model {}: {}", model_id, e);
@@ -381,7 +384,7 @@ impl TranscriptionManager {
                 LoadedEngine::SenseVoice(engine)
             }
             EngineType::Cohere => {
-                let engine = CohereModel::load(&model_path, &quantization_for(model_id))
+                let engine = CohereModel::load(&model_path, &quantization_for(&model_info.filename))
                     .map_err(|e| {
                         let error_msg =
                             format!("Failed to load Cohere model {}: {}", model_id, e);
@@ -851,6 +854,38 @@ impl Drop for TranscriptionManager {
 #[cfg(test)]
 mod engine_tests {
     use super::*;
+
+    /// Manual smoke test for the Parakeet ONNX model. Skipped unless both env
+    /// vars are set:
+    ///   PARAKEET_MODEL_DIR=/path/to/parakeet-tdt-0.6b-v3-int8 \
+    ///   PARAKEET_WAV=/path/to/mono16k.wav
+    #[test]
+    fn parakeet_real_transcription_env() {
+        let (Ok(dir), Ok(wav)) = (
+            std::env::var("PARAKEET_MODEL_DIR"),
+            std::env::var("PARAKEET_WAV"),
+        ) else {
+            return;
+        };
+
+        let mut model = ParakeetModel::load(std::path::Path::new(&dir), &Quantization::Int8)
+            .expect("failed to load parakeet model");
+        let mut reader = hound::WavReader::open(&wav).expect("failed to open wav");
+        let samples: Vec<f32> = reader
+            .samples::<i16>()
+            .map(|s| s.expect("wav sample") as f32 / i16::MAX as f32)
+            .collect();
+
+        let params = ParakeetParams {
+            language: None,
+            timestamp_granularity: Some(TimestampGranularity::Segment),
+        };
+        let result = model
+            .transcribe_with(&samples, &params)
+            .expect("parakeet transcription failed");
+        println!("Parakeet transcript: {}", result.text);
+        assert!(!result.text.trim().is_empty(), "transcript must not be empty");
+    }
 
     /// Manual smoke test for the Cohere ONNX model. Skipped unless both env
     /// vars are set:
