@@ -49,9 +49,9 @@ jobs:
           - platform: "macos-26" # for Arm based macs (M1 and above). Uses macOS 26 for Apple Intelligence SDK.
             args: "--target aarch64-apple-darwin"
             target: "aarch64-apple-darwin"
-          - platform: "macos-latest" # for Intel based macs.
-            args: "--target x86_64-apple-darwin"
-            target: "x86_64-apple-darwin"
+          # Intel macOS is not built anymore: ONNX Runtime >= 2.0.0-rc.12
+          # ships no prebuilt binary for x86_64-apple-darwin and building it
+          # from source is out of scope.
           # .deb/AppImage/RPM are built on 24.04: the prebuilt ONNX Runtime
           # static archive requires glibc >= 2.38 (22.04 ships 2.35).
           - platform: "ubuntu-24.04"

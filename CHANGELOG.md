@@ -17,6 +17,7 @@
 - Tray icons now use Parler branding instead of the inherited Handy artwork
 - Linux builds are produced on Ubuntu 24.04: the ONNX Runtime prebuilt requires **glibc 2.39+** (Ubuntu 24.04 / Debian 13 or newer)
 - macOS 11.0 is now the minimum (whisper.cpp's use of std::filesystem requires 10.15+)
+- **macOS Intel builds are discontinued**: ONNX Runtime no longer ships prebuilt binaries for x86_64 macOS
 
 ### Fixed
 
