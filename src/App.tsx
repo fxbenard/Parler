@@ -4,10 +4,8 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { platform } from "@tauri-apps/plugin-os";
 import { getIdentifier } from "@tauri-apps/api/app";
-import {
-  checkAccessibilityPermission,
-  checkMicrophonePermission,
-} from "tauri-plugin-macos-permissions-api";
+import { checkMicrophonePermission } from "tauri-plugin-macos-permissions-api";
+import { checkMacOSAccessibilityReady } from "@/lib/permissions";
 import { ModelStateEvent } from "./lib/types/events";
 import "./App.css";
 import AccessibilityPermissions from "./components/AccessibilityPermissions";
@@ -154,7 +152,7 @@ function App() {
         if (platform() === "macos" && !isDevFlavor) {
           try {
             const [hasAccessibility, hasMicrophone] = await Promise.all([
-              checkAccessibilityPermission(),
+              checkMacOSAccessibilityReady(),
               checkMicrophonePermission(),
             ]);
             if (!hasAccessibility || !hasMicrophone) {

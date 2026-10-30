@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.24] - 2026-10-30
+
+### Added
+
+- **Canary 180M Flash** and **Canary 1B v2** engines: 4 to 25 European languages, built-in speech translation (`target_language`)
+- Language selector shown for Canary in the model settings
+
+### Changed
+
+- Whisper now receives custom words as an inference `initial_prompt` instead of post-hoc fuzzy correction (better recognition, no double correction)
+
+### Fixed
+
+- API keys are no longer written to debug logs (settings dump replaced by a safe summary)
+- Stale macOS accessibility checks now recover by verifying Enigo instead of only trusting `AXIsProcessTrusted`; permission polling tolerates more transient errors
+
+
 ## [0.7.23] - 2026-10-29
 
 ### Added

@@ -2,13 +2,15 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { platform } from "@tauri-apps/plugin-os";
 import {
-  checkAccessibilityPermission,
   requestAccessibilityPermission,
   checkMicrophonePermission,
   requestMicrophonePermission,
 } from "tauri-plugin-macos-permissions-api";
+import {
+  checkMacOSAccessibilityReady,
+  initializeMacOSAccessibilitySystems,
+} from "@/lib/permissions";
 import { toast } from "sonner";
-import { commands } from "@/bindings";
 import { useSettingsStore } from "@/stores/settingsStore";
 import ParlerTextLogo from "../icons/ParlerTextLogo";
 import { Keyboard, Mic, Check, Loader2 } from "lucide-react";
@@ -40,9 +42,10 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     microphone: "checking",
   });
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const enigoInitializedRef = useRef<boolean>(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const errorCountRef = useRef<number>(0);
-  const MAX_POLLING_ERRORS = 3;
+  const MAX_POLLING_ERRORS = 10;
 
   const allGranted =
     permissions.accessibility === "granted" &&
@@ -64,18 +67,17 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     const checkInitial = async () => {
       try {
         const [accessibilityGranted, microphoneGranted] = await Promise.all([
-          checkAccessibilityPermission(),
+          checkMacOSAccessibilityReady(),
           checkMicrophonePermission(),
         ]);
 
-        // If accessibility is granted, initialize Enigo and shortcuts
-        if (accessibilityGranted) {
+        // If accessibility is granted, initialize Enigo and shortcuts (once)
+        if (accessibilityGranted && !enigoInitializedRef.current) {
+          enigoInitializedRef.current = true;
           try {
-            await Promise.all([
-              commands.initializeEnigo(),
-              commands.initializeShortcuts(),
-            ]);
+            await initializeMacOSAccessibilitySystems();
           } catch (e) {
+            enigoInitializedRef.current = false;
             console.warn("Failed to initialize after permission grant:", e);
           }
         }
@@ -112,7 +114,7 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     pollingRef.current = setInterval(async () => {
       try {
         const [accessibilityGranted, microphoneGranted] = await Promise.all([
-          checkAccessibilityPermission(),
+          checkMacOSAccessibilityReady(),
           checkMicrophonePermission(),
         ]);
 
@@ -121,13 +123,14 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
 
           if (accessibilityGranted && prev.accessibility !== "granted") {
             newState.accessibility = "granted";
-            // Initialize Enigo and shortcuts when accessibility is granted
-            Promise.all([
-              commands.initializeEnigo(),
-              commands.initializeShortcuts(),
-            ]).catch((e) => {
-              console.warn("Failed to initialize after permission grant:", e);
-            });
+            // Initialize Enigo and shortcuts when accessibility is granted (once)
+            if (!enigoInitializedRef.current) {
+              enigoInitializedRef.current = true;
+              initializeMacOSAccessibilitySystems().catch((e) => {
+                enigoInitializedRef.current = false;
+                console.warn("Failed to initialize after permission grant:", e);
+              });
+            }
           }
 
           if (microphoneGranted && prev.microphone !== "granted") {

@@ -113,8 +113,11 @@ pub fn finalize_transcription(
     text: &str,
     settings: &AppSettings,
     hint: ConversionHint,
+    use_custom_words: bool,
 ) -> String {
-    let corrected = if settings.custom_words.is_empty() {
+    // Whisper receives custom words as an inference `initial_prompt`, so the
+    // fuzzy post-correction is skipped for it to avoid double correction.
+    let corrected = if !use_custom_words || settings.custom_words.is_empty() {
         text.to_string()
     } else {
         apply_custom_words(text, &settings.custom_words, settings.word_correction_threshold)
@@ -784,6 +787,7 @@ mod tests {
             "rendez-vous le vingt-trois avril",
             &settings,
             ConversionHint::Known(ConversionLanguage::French),
+            true,
         );
         assert!(
             !out.contains("23"),
@@ -796,6 +800,7 @@ mod tests {
             "rendez-vous le vingt-trois avril",
             &settings,
             ConversionHint::Known(ConversionLanguage::French),
+            true,
         );
         assert!(out.contains("23"), "toggle ON must convert, got: {}", out);
     }
@@ -809,6 +814,7 @@ mod tests {
             "charge b c'est vingt euros",
             &settings,
             ConversionHint::Known(ConversionLanguage::French),
+            true,
         );
         assert!(out.contains("ChargeBee"), "custom words lost: {}", out);
         assert!(out.contains("20"), "numbers not converted: {}", out);

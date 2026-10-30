@@ -1025,7 +1025,15 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         // Parse the entire settings object
         match serde_json::from_value::<AppSettings>(settings_value) {
             Ok(mut settings) => {
-                debug!("Found existing settings: {:?}", settings);
+                // Never log the settings struct: it carries API keys in memory
+                // (post_process_api_keys, gemini_api_key). Log a safe summary.
+                debug!(
+                    "Loaded settings: {} providers, {} prompts, {} actions, {} custom words",
+                    settings.post_process_providers.len(),
+                    settings.post_process_prompts.len(),
+                    settings.post_process_actions.len(),
+                    settings.custom_words.len()
+                );
                 let default_settings = get_default_settings();
                 let mut updated = false;
 

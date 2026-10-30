@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter};
 use transcribe_rs::{
     onnx::{
+        canary::{CanaryModel, CanaryParams},
         cohere::{CohereModel, CohereParams},
         moonshine::{
             MoonshineModel, MoonshineParams, MoonshineStreamingParams, MoonshineVariant,
@@ -77,6 +78,7 @@ enum LoadedEngine {
     MoonshineStreaming(StreamingModel),
     SenseVoice(SenseVoiceModel),
     Cohere(CohereModel),
+    Canary(CanaryModel),
     GeminiApi,
     AppleSpeech,
 }
@@ -401,6 +403,24 @@ impl TranscriptionManager {
                     })?;
                 LoadedEngine::Cohere(engine)
             }
+            EngineType::Canary => {
+                let engine = CanaryModel::load(&model_path, &quantization_for(&model_info.filename))
+                    .map_err(|e| {
+                        let error_msg =
+                            format!("Failed to load Canary model {}: {}", model_id, e);
+                        let _ = self.app_handle.emit(
+                            "model-state-changed",
+                            ModelStateEvent {
+                                event_type: "loading_failed".to_string(),
+                                model_id: Some(model_id.to_string()),
+                                model_name: Some(model_info.name.clone()),
+                                error: Some(error_msg.clone()),
+                            },
+                        );
+                        anyhow::anyhow!(error_msg)
+                    })?;
+                LoadedEngine::Canary(engine)
+            }
             EngineType::AppleSpeech => {
                 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
                 {
@@ -571,6 +591,7 @@ impl TranscriptionManager {
                     &result,
                     &settings,
                     conversion_hint_from_settings(&settings),
+                    true,
                 );
 
                 let et = std::time::Instant::now();
@@ -588,6 +609,9 @@ impl TranscriptionManager {
         // Declared before the engine block: set per engine arm inside it, consumed
         // by the post-processing chain after it.
         let mut conversion_hint = ConversionHint::Skip;
+        // Whisper gets custom words via `initial_prompt`; other engines keep
+        // the fuzzy post-correction.
+        let mut apply_custom_words_post = true;
         let parakeet_hint = {
             let model_id = self.current_model_id.lock().unwrap();
             match model_id.as_deref() {
@@ -642,9 +666,15 @@ impl TranscriptionManager {
                                 Some(normalized)
                             };
 
+                            apply_custom_words_post = false;
                             let params = WhisperInferenceParams {
                                 language: whisper_language,
                                 translate: settings.translate_to_english,
+                                initial_prompt: if settings.custom_words.is_empty() {
+                                    None
+                                } else {
+                                    Some(settings.custom_words.join(", "))
+                                },
                                 ..Default::default()
                             };
 
@@ -708,6 +738,33 @@ impl TranscriptionManager {
                                 .transcribe_with(&audio, &params)
                                 .map_err(|e| {
                                     anyhow::anyhow!("SenseVoice transcription failed: {}", e)
+                                })
+                        }
+                        LoadedEngine::Canary(canary_engine) => {
+                            conversion_hint = conversion_hint_from_settings(&settings);
+                            // Canary needs an explicit source language; in
+                            // "auto" mode use the UI language as the hint.
+                            let language = if settings.selected_language == "auto" {
+                                settings.app_language.clone()
+                            } else {
+                                settings.selected_language.clone()
+                            };
+                            let target = if settings.translate_to_english
+                                && !language.starts_with("en")
+                            {
+                                Some("en".to_string())
+                            } else {
+                                None
+                            };
+                            let params = CanaryParams {
+                                language: Some(language),
+                                target_language: target,
+                                ..Default::default()
+                            };
+                            canary_engine
+                                .transcribe_with(&audio, &params)
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Canary transcription failed: {}", e)
                                 })
                         }
                         LoadedEngine::Cohere(cohere_engine) => {
@@ -818,7 +875,12 @@ impl TranscriptionManager {
         };
 
         // Full post-processing chain (custom words → fillers → number conversion)
-        let filtered_result = finalize_transcription(&result.text, &settings, conversion_hint);
+        let filtered_result = finalize_transcription(
+            &result.text,
+            &settings,
+            conversion_hint,
+            apply_custom_words_post,
+        );
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -867,6 +929,38 @@ impl Drop for TranscriptionManager {
 #[cfg(test)]
 mod engine_tests {
     use super::*;
+
+    /// Manual smoke test for the Canary ONNX model.
+    ///   CANARY_MODEL_DIR=/path/canary-180m-flash \
+    ///   CANARY_WAV=/path/mono16k.wav
+    #[test]
+    fn canary_real_transcription_env() {
+        let (Ok(dir), Ok(wav)) = (
+            std::env::var("CANARY_MODEL_DIR"),
+            std::env::var("CANARY_WAV"),
+        ) else {
+            return;
+        };
+
+        let mut model = CanaryModel::load(std::path::Path::new(&dir), &Quantization::Int8)
+            .expect("failed to load canary model");
+        let mut reader = hound::WavReader::open(&wav).expect("failed to open wav");
+        let samples: Vec<f32> = reader
+            .samples::<i16>()
+            .map(|s| s.expect("wav sample") as f32 / i16::MAX as f32)
+            .collect();
+
+        let params = CanaryParams {
+            language: Some("fr".to_string()),
+            target_language: None,
+            ..Default::default()
+        };
+        let result = model
+            .transcribe_with(&samples, &params)
+            .expect("canary transcription failed");
+        println!("Canary transcript: {}", result.text);
+        assert!(!result.text.trim().is_empty(), "transcript must not be empty");
+    }
 
     /// Manual smoke test for the Parakeet ONNX model. Skipped unless both env
     /// vars are set:
