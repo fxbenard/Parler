@@ -1,6 +1,6 @@
 [package]
 name = "parler"
-version = "0.7.24"
+version = "0.7.25"
 description = "Parler"
 authors = ["cjpais"]
 edition = "2021"
@@ -80,6 +80,7 @@ tauri-plugin-dialog = "2"
 lingua = { version = "1.8.0", default-features = false, features = ["english", "french"] }
 text2num = "2.6.2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+sha2 = "0.11.1"
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
@@ -100,6 +101,8 @@ windows = { version = "0.61.3", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 # Metal acceleration for the whisper.cpp backend.
 transcribe-rs = { version = "0.3.12", features = ["whisper-metal"] }

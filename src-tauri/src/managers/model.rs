@@ -860,12 +860,20 @@ impl ModelManager {
     /// Re-running resumes at file granularity.
     async fn download_huggingface_model(&self, model_id: &str, repo: &str) -> Result<()> {
         #[derive(Deserialize)]
+        struct HfLfs {
+            #[serde(default)]
+            oid: String,
+        }
+        #[derive(Deserialize)]
         struct HfEntry {
             path: String,
             #[serde(default)]
             size: u64,
             #[serde(rename = "type", default)]
             kind: String,
+            /// Hugging Face LFS metadata: `oid` is the file's sha256.
+            #[serde(default)]
+            lfs: Option<HfLfs>,
         }
 
         let model_info = {
@@ -944,9 +952,12 @@ impl ModelManager {
                     .error_for_status()?
                     .bytes_stream();
                 let mut out = tokio::fs::File::create(&dest).await?;
+                use sha2::{Digest, Sha256};
                 use tokio::io::AsyncWriteExt;
+                let mut hasher = Sha256::new();
                 while let Some(chunk) = stream.next().await {
                     let chunk = chunk?;
+                    hasher.update(&chunk);
                     out.write_all(&chunk).await?;
                     done += chunk.len() as u64;
                     if last_emit.elapsed() >= Duration::from_millis(100) {
@@ -965,6 +976,27 @@ impl ModelManager {
                     }
                 }
                 out.flush().await?;
+                drop(out);
+
+                // Verify integrity against Hugging Face's sha256 when known.
+                if let Some(lfs) = &file.lfs {
+                    if !lfs.oid.is_empty() {
+                        let digest = hasher.finalize();
+                        let actual: String = digest
+                            .iter()
+                            .map(|byte| format!("{:02x}", byte))
+                            .collect();
+                        if actual != lfs.oid {
+                            let _ = fs::remove_file(&dest);
+                            return Err(anyhow::anyhow!(
+                                "Checksum mismatch for {} (expected {}, got {})",
+                                file.path,
+                                lfs.oid,
+                                actual
+                            ));
+                        }
+                    }
+                }
             }
 
             Ok(())

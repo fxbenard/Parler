@@ -13,6 +13,21 @@ use tauri::WebviewWindowBuilder;
 use tauri::WebviewUrl;
 
 #[cfg(target_os = "macos")]
+use core_foundation::{
+    base::{CFType, TCFType},
+    dictionary::CFDictionary,
+    number::CFNumber,
+    string::CFString,
+};
+#[cfg(target_os = "macos")]
+use core_graphics::{
+    geometry::CGRect,
+    window::{
+        copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer,
+        kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+    },
+};
+#[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, CollectionBehavior, PanelBuilder, PanelLevel};
 
 #[cfg(target_os = "linux")]
@@ -230,8 +245,113 @@ fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
     get_fallback_monitor(app_handle, &monitors)
 }
 
+/// Logical rectangle (points) of a window on macOS.
+#[cfg(target_os = "macos")]
+struct LogicalRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Monitor containing a logical point, normalizing Tauri's physical coordinates.
+fn monitor_containing_logical_point(
+    app_handle: &AppHandle,
+    x: f64,
+    y: f64,
+) -> Option<tauri::Monitor> {
+    let monitors = app_handle.available_monitors().unwrap_or_default();
+    for monitor in &monitors {
+        let scale = monitor.scale_factor();
+        let pos = PhysicalPosition::new(
+            (monitor.position().x as f64 / scale).round() as i32,
+            (monitor.position().y as f64 / scale).round() as i32,
+        );
+        let size = PhysicalSize::new(
+            (monitor.size().width as f64 / scale).round() as u32,
+            (monitor.size().height as f64 / scale).round() as u32,
+        );
+        if x >= pos.x as f64
+            && x < (pos.x + size.width as i32) as f64
+            && y >= pos.y as f64
+            && y < (pos.y + size.height as i32) as f64
+        {
+            return Some(monitor.clone());
+        }
+    }
+    None
+}
+
+/// Monitor hosting the frontmost (focused) window. The overlay should appear
+/// where the user is typing, not where the cursor happens to rest.
+#[cfg(target_os = "macos")]
+fn get_monitor_with_focused_window(app_handle: &AppHandle) -> Option<tauri::Monitor> {
+    let rect = get_frontmost_window_rect()?;
+    monitor_containing_logical_point(
+        app_handle,
+        rect.x + rect.width / 2.0,
+        rect.y + rect.height / 2.0,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn get_frontmost_window_rect() -> Option<LogicalRect> {
+    let window_infos = copy_window_info(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    )?;
+
+    let layer_key = unsafe { CFString::wrap_under_get_rule(kCGWindowLayer) };
+    let bounds_key = unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) };
+
+    for window_info_ref in window_infos.get_all_values() {
+        let window_info = unsafe {
+            CFDictionary::<CFString, CFType>::wrap_under_get_rule(
+                window_info_ref as core_foundation::dictionary::CFDictionaryRef,
+            )
+        };
+
+        let layer = window_info
+            .find(&layer_key)
+            .and_then(|value| value.downcast::<CFNumber>())
+            .and_then(|value| value.to_i32());
+        if layer != Some(0) {
+            continue;
+        }
+
+        let bounds = window_info
+            .find(&bounds_key)
+            .and_then(|value| value.downcast::<CFDictionary>())
+            .and_then(|value| CGRect::from_dict_representation(&value));
+        let Some(bounds) = bounds else { continue };
+        if bounds.size.width <= 1.0 || bounds.size.height <= 1.0 {
+            continue;
+        }
+
+        return Some(LogicalRect {
+            x: bounds.origin.x,
+            y: bounds.origin.y,
+            width: bounds.size.width,
+            height: bounds.size.height,
+        });
+    }
+
+    None
+}
+
+fn get_monitor_for_overlay(app_handle: &AppHandle) -> Option<tauri::Monitor> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(monitor) = get_monitor_with_focused_window(app_handle) {
+            return Some(monitor);
+        }
+    }
+
+    get_monitor_with_cursor(app_handle)
+}
+
 fn calculate_overlay_position(app_handle: &AppHandle) -> Option<(f64, f64)> {
-    if let Some(monitor) = get_monitor_with_cursor(app_handle) {
+    if let Some(monitor) = get_monitor_for_overlay(app_handle) {
         let scale = monitor.scale_factor();
         let monitor_x = monitor.position().x as f64 / scale;
         let monitor_y = monitor.position().y as f64 / scale;

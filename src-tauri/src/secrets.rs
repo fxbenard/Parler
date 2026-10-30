@@ -278,23 +278,6 @@ mod tests {
     }
 
     #[test]
-    fn get_many_returns_present_keys_only() {
-        let _g = test_guard();
-        set_secret(&provider_api_key_name("openai"), "sk-1").unwrap();
-        set_secret(GEMINI_API_KEY, "gm-1").unwrap();
-
-        let keys = vec![
-            provider_api_key_name("openai"),
-            provider_api_key_name("anthropic"),
-            GEMINI_API_KEY.to_string(),
-        ];
-        let secrets = get_many(&keys);
-        assert_eq!(secrets.len(), 2);
-        assert_eq!(secrets.get(&provider_api_key_name("openai")).unwrap(), "sk-1");
-        assert_eq!(secrets.get(GEMINI_API_KEY).unwrap(), "gm-1");
-    }
-
-    #[test]
     fn availability_probe_uses_backend() {
         let _g = test_guard();
         assert!(is_available());

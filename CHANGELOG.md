@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.25] - 2026-10-30
+
+### Added
+
+- Model downloads from Hugging Face are verified against the repository's sha256 (LFS oid) while streaming; a corrupt file is deleted instead of being extracted
+
+### Changed
+
+- Whisper hallucination loops ("doc doc doc doc") now collapse for words of any length, not just 1-2 letter stutters
+- The recording overlay appears on the display hosting the focused window on macOS (falls back to the cursor display)
+
+### Fixed
+
+- Removed the last dead code warnings so CI builds are quiet
+
+
 ## [0.7.24] - 2026-10-30
 
 ### Added
