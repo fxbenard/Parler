@@ -71,11 +71,21 @@ The process is entirely local:
 
 1. Download the latest release from the [releases page](https://github.com/fxbenard/Parler/releases)
 2. Install the application
-3. **macOS only:** Since the app is not signed with an Apple Developer certificate, macOS will block it. After installing, run:
-   ```bash
-   xattr -cr /Applications/Parler.app
-   ```
-   This removes the quarantine attribute and allows the app to launch.
+
+   - **macOS (Apple Silicon only):** download `Parler_x.y.z_aarch64.dmg`. Intel Macs are not supported anymore (ONNX Runtime no longer ships x86_64 macOS binaries).
+   - **Linux:** `.deb` (Debian/Ubuntu 24.04+), `.rpm` or `.AppImage`. Requires glibc 2.39+.
+
+3. **macOS first launch:** the app is signed ad-hoc but not notarized (no paid Apple Developer certificate), so macOS blocks the first launch. Pick one:
+
+   - **Finder:** right-click `Parler.app` → **Open** → **Open** in the dialog.
+   - **System Settings:** Privacy & Security → scroll down → **Open Anyway**.
+   - **Terminal:**
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/Parler.app
+     ```
+
+   You only need this once per downloaded version. Updates installed through the in-app updater are not quarantined and skip this step.
+
 4. Launch Parler and grant necessary system permissions (microphone, accessibility)
 5. Configure your preferred keyboard shortcuts in Settings
 6. Start transcribing!
