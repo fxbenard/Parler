@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.26] - 2026-11-02
+
+### Fixed
+
+- macOS builds are now properly ad-hoc signed (`APPLE_SIGNING_IDENTITY="-"`). Previous bundles carried a broken signature and macOS reported "Parler.app is damaged" when the DMG was downloaded through a browser
+
+
 ## [0.7.25] - 2026-10-30
 
 ### Added
